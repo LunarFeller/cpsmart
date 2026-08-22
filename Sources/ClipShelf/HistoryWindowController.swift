@@ -1,12 +1,25 @@
 import AppKit
 
-private final class HistoryTableView: NSTableView {
+private final class FloatingHistoryPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+private final class KeyboardCollectionView: NSCollectionView {
+    var onMoveLeft: (() -> Void)?
+    var onMoveRight: (() -> Void)?
     var onConfirm: (() -> Void)?
     var onDelete: (() -> Void)?
     var onEscape: (() -> Void)?
 
+    override var acceptsFirstResponder: Bool { true }
+
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
+        case 123:
+            onMoveLeft?()
+        case 124:
+            onMoveRight?()
         case 36, 76:
             onConfirm?()
         case 51, 117:
@@ -19,69 +32,98 @@ private final class HistoryTableView: NSTableView {
     }
 }
 
-private final class HistoryCellView: NSTableCellView {
+private final class ClickableCardView: NSView {
+    var onClick: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+}
+
+private final class HistoryCollectionItem: NSCollectionViewItem {
+    var onClick: (() -> Void)? {
+        didSet { cardView.onClick = onClick }
+    }
+
+    private let cardView = ClickableCardView()
     private let iconView = NSImageView()
-    private let titleLabel = NSTextField(labelWithString: "")
+    private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    override var isSelected: Bool {
+        didSet { updateSelectionAppearance() }
+    }
+
+    override func loadView() {
+        cardView.wantsLayer = true
+        cardView.layer?.cornerRadius = 12
+        cardView.layer?.borderWidth = 1
+        cardView.layer?.masksToBounds = true
+        cardView.setAccessibilityRole(.button)
+        view = cardView
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyDown
         iconView.contentTintColor = .secondaryLabelColor
+        iconView.wantsLayer = true
+        iconView.layer?.cornerRadius = 6
+        iconView.layer?.masksToBounds = true
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 1
+        titleLabel.maximumNumberOfLines = 3
 
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
-        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.font = .systemFont(ofSize: 10)
         detailLabel.textColor = .secondaryLabelColor
         detailLabel.lineBreakMode = .byTruncatingTail
         detailLabel.maximumNumberOfLines = 1
 
-        addSubview(iconView)
-        addSubview(titleLabel)
-        addSubview(detailLabel)
+        cardView.addSubview(iconView)
+        cardView.addSubview(titleLabel)
+        cardView.addSubview(detailLabel)
 
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 24),
-            iconView.heightAnchor.constraint(equalToConstant: 24),
+            iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
+            iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 12),
+            iconView.widthAnchor.constraint(equalToConstant: 28),
+            iconView.heightAnchor.constraint(equalToConstant: 28),
 
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            detailLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            detailLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -10),
+            detailLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
 
-            detailLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            detailLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            detailLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3)
+            titleLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
+            titleLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 8),
+            titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: cardView.bottomAnchor, constant: -10)
         ])
-    }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+        updateSelectionAppearance()
     }
 
     func configure(with entry: ClipboardEntry) {
         switch entry.payload {
         case .text(let text):
             iconView.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: "文本")
-            titleLabel.stringValue = Self.oneLine(text)
+            titleLabel.stringValue = Self.preview(text)
             detailLabel.stringValue = "文本 · \(Self.relativeDate.string(for: entry.createdAt) ?? "刚刚")"
 
         case .image(let data, _):
             iconView.image = NSImage(data: data)
                 ?? NSImage(systemSymbolName: "photo", accessibilityDescription: "图片")
             if let image = NSImage(data: data) {
-                titleLabel.stringValue = "图片 · \(Int(image.size.width)) × \(Int(image.size.height))"
+                titleLabel.stringValue = "图片\n\(Int(image.size.width)) × \(Int(image.size.height))"
             } else {
                 titleLabel.stringValue = "图片"
             }
-            detailLabel.stringValue = "图片 · \(Self.byteCount.string(fromByteCount: Int64(data.count))) · \(Self.relativeDate.string(for: entry.createdAt) ?? "刚刚")"
+            detailLabel.stringValue = "图片 · \(Self.byteCount.string(fromByteCount: Int64(data.count)))"
 
         case .files(let paths):
             iconView.image = NSWorkspace.shared.icon(forFile: paths.first ?? "")
@@ -92,14 +134,34 @@ private final class HistoryCellView: NSTableCellView {
             }
             detailLabel.stringValue = "文件 · \(Self.relativeDate.string(for: entry.createdAt) ?? "刚刚")"
         }
+
+        cardView.setAccessibilityLabel(titleLabel.stringValue)
     }
 
-    private static func oneLine(_ text: String) -> String {
+    private func updateSelectionAppearance() {
+        guard isViewLoaded else { return }
+        if isSelected {
+            cardView.layer?.borderWidth = 2
+            cardView.layer?.borderColor = NSColor.controlAccentColor.cgColor
+            cardView.layer?.backgroundColor = NSColor.controlAccentColor
+                .withAlphaComponent(0.16)
+                .cgColor
+        } else {
+            cardView.layer?.borderWidth = 1
+            cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+            cardView.layer?.backgroundColor = NSColor.controlBackgroundColor
+                .withAlphaComponent(0.58)
+                .cgColor
+        }
+    }
+
+    private static func preview(_ text: String) -> String {
         text
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .joined(separator: "  ↵  ")
+            .prefix(3)
+            .joined(separator: "\n")
     }
 
     private static let relativeDate: RelativeDateTimeFormatter = {
@@ -117,34 +179,37 @@ private final class HistoryCellView: NSTableCellView {
 }
 
 final class HistoryWindowController: NSWindowController,
-    NSTableViewDataSource,
-    NSTableViewDelegate,
-    NSSearchFieldDelegate
+    NSCollectionViewDataSource,
+    NSCollectionViewDelegate
 {
     var onChoose: ((ClipboardEntry) -> Void)?
     var onDelete: ((ClipboardEntry) -> Void)?
 
-    private let tableView = HistoryTableView()
-    private let searchField = NSSearchField()
+    private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
+    private let collectionView = KeyboardCollectionView()
     private let countLabel = NSTextField(labelWithString: "")
-    private let emptyLabel = NSTextField(labelWithString: "还没有剪贴板记录\n复制一些文本、图片或文件后，它们会出现在这里。")
-    private var allEntries: [ClipboardEntry] = []
-    private var visibleEntries: [ClipboardEntry] = []
+    private let selectionLabel = NSTextField(labelWithString: "选择后立即写入系统剪贴板")
+    private let emptyLabel = NSTextField(labelWithString: "还没有记录 · 先复制一些文本、图片或文件")
+    private var entries: [ClipboardEntry] = []
+    private var selectedIndex = 0
+    private var previousApplication: NSRunningApplication?
+    private var suppressSelectionCallback = false
 
     init() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 500),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+        let panel = FloatingHistoryPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 210),
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
         panel.title = "ClipShelf 剪贴板历史"
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
         panel.level = .floating
-        panel.collectionBehavior = [.moveToActiveSpace, .transient]
-        panel.minSize = NSSize(width: 480, height: 360)
+        panel.collectionBehavior = [.moveToActiveSpace, .transient, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
 
         super.init(window: panel)
         buildInterface()
@@ -155,27 +220,43 @@ final class HistoryWindowController: NSWindowController,
     }
 
     func show(entries: [ClipboardEntry]) {
-        allEntries = entries
-        searchField.stringValue = ""
-        applyFilter()
+        if window?.isVisible == true {
+            dismiss(restorePreviousApplication: true)
+            return
+        }
+
+        previousApplication = NSWorkspace.shared.frontmostApplication
+        self.entries = entries
+        selectedIndex = 0
+        reloadCollection(selecting: entries.isEmpty ? nil : 0, notify: false)
 
         guard let window else { return }
-        window.center()
+        positionWindow(window)
         NSApp.activate(ignoringOtherApps: true)
-        showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
-
-        if visibleEntries.isEmpty {
-            window.makeFirstResponder(searchField)
-        } else {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-            window.makeFirstResponder(searchField)
+        window.orderFrontRegardless()
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(self.collectionView)
         }
     }
 
     func refresh(entries: [ClipboardEntry]) {
-        allEntries = entries
-        applyFilter()
+        let selectedID = self.entries.indices.contains(selectedIndex)
+            ? self.entries[selectedIndex].id
+            : nil
+        self.entries = entries
+
+        let newIndex: Int?
+        if let selectedID, let matchingIndex = entries.firstIndex(where: { $0.id == selectedID }) {
+            newIndex = matchingIndex
+        } else if entries.isEmpty {
+            newIndex = nil
+        } else {
+            newIndex = min(selectedIndex, entries.count - 1)
+        }
+        reloadCollection(selecting: newIndex, notify: false)
     }
 
     private func buildInterface() {
@@ -183,70 +264,79 @@ final class HistoryWindowController: NSWindowController,
 
         let effectView = NSVisualEffectView()
         effectView.translatesAutoresizingMaskIntoConstraints = false
-        effectView.material = .sidebar
+        effectView.material = .hudWindow
         effectView.blendingMode = .behindWindow
         effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 18
+        effectView.layer?.masksToBounds = true
         contentView.addSubview(effectView)
 
         let titleLabel = NSTextField(labelWithString: "剪贴板历史")
-        titleLabel.font = .systemFont(ofSize: 22, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        countLabel.font = .systemFont(ofSize: 12)
+        countLabel.font = .systemFont(ofSize: 11)
         countLabel.textColor = .secondaryLabelColor
         countLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        searchField.placeholderString = "搜索历史记录"
-        searchField.sendsSearchStringImmediately = true
-        searchField.delegate = self
-        searchField.translatesAutoresizingMaskIntoConstraints = false
+        selectionLabel.font = .systemFont(ofSize: 11, weight: .medium)
+        selectionLabel.textColor = .secondaryLabelColor
+        selectionLabel.alignment = .right
+        selectionLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let scrollView = NSScrollView()
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
 
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("HistoryColumn"))
-        column.resizingMask = .autoresizingMask
-        tableView.addTableColumn(column)
-        tableView.headerView = nil
-        tableView.backgroundColor = .clear
-        tableView.selectionHighlightStyle = .regular
-        tableView.rowHeight = 56
-        tableView.intercellSpacing = NSSize(width: 0, height: 2)
-        tableView.dataSource = self
-        tableView.delegate = self
-        tableView.target = self
-        tableView.doubleAction = #selector(confirmSelection)
-        tableView.onConfirm = { [weak self] in self?.confirmSelection() }
-        tableView.onDelete = { [weak self] in self?.deleteSelection() }
-        tableView.onEscape = { [weak self] in self?.close() }
-        scrollView.documentView = tableView
+        let layout = NSCollectionViewFlowLayout()
+        layout.scrollDirection = .horizontal
+        layout.itemSize = NSSize(width: 180, height: 112)
+        layout.minimumInteritemSpacing = 10
+        layout.minimumLineSpacing = 10
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
+
+        collectionView.collectionViewLayout = layout
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        collectionView.isSelectable = true
+        collectionView.allowsMultipleSelection = false
+        collectionView.backgroundColors = [.clear]
+        collectionView.register(
+            HistoryCollectionItem.self,
+            forItemWithIdentifier: Self.itemIdentifier
+        )
+        collectionView.onMoveLeft = { [weak self] in self?.moveSelection(by: -1) }
+        collectionView.onMoveRight = { [weak self] in self?.moveSelection(by: 1) }
+        collectionView.onConfirm = { [weak self] in
+            self?.dismiss(restorePreviousApplication: true)
+        }
+        collectionView.onDelete = { [weak self] in self?.deleteSelection() }
+        collectionView.onEscape = { [weak self] in
+            self?.dismiss(restorePreviousApplication: true)
+        }
+        scrollView.documentView = collectionView
 
         emptyLabel.alignment = .center
+        emptyLabel.font = .systemFont(ofSize: 13)
         emptyLabel.textColor = .secondaryLabelColor
-        emptyLabel.maximumNumberOfLines = 2
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let privacyLabel = NSTextField(labelWithString: "密码管理器标记的敏感内容不会被记录")
-        privacyLabel.font = .systemFont(ofSize: 11)
-        privacyLabel.textColor = .tertiaryLabelColor
-        privacyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let shortcutLabel = NSTextField(labelWithString: "↑↓ 选择   ↩ 复制   ⌫ 删除   Esc 关闭")
-        shortcutLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        shortcutLabel.textColor = .secondaryLabelColor
-        shortcutLabel.alignment = .right
-        shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
+        let helpLabel = NSTextField(labelWithString: "← → 切换并复制   ·   点击选择   ·   ↩ 完成   ·   ⌫ 删除   ·   Esc 关闭")
+        helpLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        helpLabel.textColor = .tertiaryLabelColor
+        helpLabel.alignment = .center
+        helpLabel.translatesAutoresizingMaskIntoConstraints = false
 
         effectView.addSubview(titleLabel)
         effectView.addSubview(countLabel)
-        effectView.addSubview(searchField)
+        effectView.addSubview(selectionLabel)
         effectView.addSubview(scrollView)
         effectView.addSubview(emptyLabel)
-        effectView.addSubview(privacyLabel)
-        effectView.addSubview(shortcutLabel)
+        effectView.addSubview(helpLabel)
 
         NSLayoutConstraint.activate([
             effectView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -254,117 +344,140 @@ final class HistoryWindowController: NSWindowController,
             effectView.topAnchor.constraint(equalTo: contentView.topAnchor),
             effectView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
-            titleLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 24),
-            titleLabel.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 28),
+            titleLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 18),
+            titleLabel.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 14),
 
-            countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 10),
+            countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
             countLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
 
-            searchField.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 24),
-            searchField.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -24),
-            searchField.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 16),
+            selectionLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -18),
+            selectionLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
+            selectionLabel.leadingAnchor.constraint(greaterThanOrEqualTo: countLabel.trailingAnchor, constant: 12),
 
-            scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 16),
-            scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -16),
-            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 12),
-            scrollView.bottomAnchor.constraint(equalTo: privacyLabel.topAnchor, constant: -12),
+            scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 14),
+            scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -14),
+            scrollView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            scrollView.heightAnchor.constraint(equalToConstant: 124),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
 
-            privacyLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 24),
-            privacyLabel.bottomAnchor.constraint(equalTo: effectView.bottomAnchor, constant: -16),
-
-            shortcutLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -24),
-            shortcutLabel.centerYAnchor.constraint(equalTo: privacyLabel.centerYAnchor),
-            shortcutLabel.leadingAnchor.constraint(greaterThanOrEqualTo: privacyLabel.trailingAnchor, constant: 12)
+            helpLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 18),
+            helpLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -18),
+            helpLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 8),
+            helpLabel.bottomAnchor.constraint(lessThanOrEqualTo: effectView.bottomAnchor, constant: -10)
         ])
     }
 
-    private func applyFilter() {
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty {
-            visibleEntries = allEntries
-        } else {
-            visibleEntries = allEntries.filter {
-                $0.payload.searchableText.localizedCaseInsensitiveContains(query)
-            }
-        }
-        tableView.reloadData()
-        emptyLabel.isHidden = !visibleEntries.isEmpty
-        countLabel.stringValue = "\(visibleEntries.count) 条"
+    private func positionWindow(_ window: NSWindow) {
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) })
+            ?? NSScreen.main
+        guard let visibleFrame = screen?.visibleFrame else { return }
 
-        if !visibleEntries.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        let width = min(900, max(500, visibleFrame.width - 48))
+        let height: CGFloat = 210
+        let origin = NSPoint(
+            x: visibleFrame.midX - width / 2,
+            y: visibleFrame.minY + 24
+        )
+        window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
+    }
+
+    private func reloadCollection(selecting index: Int?, notify: Bool) {
+        suppressSelectionCallback = true
+        collectionView.reloadData()
+        emptyLabel.isHidden = !entries.isEmpty
+        countLabel.stringValue = "\(entries.count) 条"
+
+        if let index, entries.indices.contains(index) {
+            selectedIndex = index
+            let indexPath = IndexPath(item: index, section: 0)
+            collectionView.selectionIndexPaths = [indexPath]
+            collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
+        } else {
+            selectedIndex = 0
+            collectionView.selectionIndexPaths = []
+        }
+        suppressSelectionCallback = false
+
+        if notify, let index, entries.indices.contains(index) {
+            chooseEntry(at: index)
+        } else {
+            selectionLabel.stringValue = "选择后立即写入系统剪贴板"
+            selectionLabel.textColor = .secondaryLabelColor
         }
     }
 
-    @objc private func confirmSelection() {
-        guard !visibleEntries.isEmpty else { return }
-        let row = tableView.selectedRow >= 0 ? tableView.selectedRow : 0
-        guard visibleEntries.indices.contains(row) else { return }
-        onChoose?(visibleEntries[row])
-        close()
+    private func moveSelection(by offset: Int) {
+        guard !entries.isEmpty else { return }
+        let newIndex = min(max(selectedIndex + offset, 0), entries.count - 1)
+        selectAndChoose(index: newIndex)
+    }
+
+    private func selectAndChoose(index: Int) {
+        guard entries.indices.contains(index) else { return }
+        selectedIndex = index
+        suppressSelectionCallback = true
+        let indexPath = IndexPath(item: index, section: 0)
+        collectionView.selectionIndexPaths = [indexPath]
+        collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
+        suppressSelectionCallback = false
+        chooseEntry(at: index)
+        window?.makeFirstResponder(collectionView)
+    }
+
+    private func chooseEntry(at index: Int) {
+        guard entries.indices.contains(index) else { return }
+        let entry = entries[index]
+        onChoose?(entry)
+        selectionLabel.stringValue = "✓ 已切换到第 \(index + 1) 条"
+        selectionLabel.textColor = .controlAccentColor
     }
 
     private func deleteSelection() {
-        let row = tableView.selectedRow
-        guard visibleEntries.indices.contains(row) else { return }
-        let entry = visibleEntries[row]
-        onDelete?(entry)
-        let nextRow = min(row, max(visibleEntries.count - 1, 0))
-        if !visibleEntries.isEmpty {
-            tableView.selectRowIndexes(IndexSet(integer: nextRow), byExtendingSelection: false)
+        guard entries.indices.contains(selectedIndex) else { return }
+        onDelete?(entries[selectedIndex])
+    }
+
+    private func dismiss(restorePreviousApplication: Bool) {
+        window?.orderOut(nil)
+        if restorePreviousApplication,
+           let previousApplication,
+           previousApplication.bundleIdentifier != Bundle.main.bundleIdentifier {
+            previousApplication.activate(options: [.activateIgnoringOtherApps])
         }
+        previousApplication = nil
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        visibleEntries.count
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        numberOfItemsInSection section: Int
+    ) -> Int {
+        entries.count
     }
 
-    func tableView(
-        _ tableView: NSTableView,
-        viewFor tableColumn: NSTableColumn?,
-        row: Int
-    ) -> NSView? {
-        let identifier = NSUserInterfaceItemIdentifier("HistoryCell")
-        let cell = tableView.makeView(withIdentifier: identifier, owner: self) as? HistoryCellView
-            ?? HistoryCellView()
-        cell.identifier = identifier
-        cell.configure(with: visibleEntries[row])
-        return cell
-    }
-
-    func controlTextDidChange(_ obj: Notification) {
-        applyFilter()
-    }
-
-    func control(
-        _ control: NSControl,
-        textView: NSTextView,
-        doCommandBy commandSelector: Selector
-    ) -> Bool {
-        switch commandSelector {
-        case #selector(NSResponder.moveDown(_:)):
-            let next = min(max(tableView.selectedRow + 1, 0), visibleEntries.count - 1)
-            guard next >= 0 else { return true }
-            tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
-            tableView.scrollRowToVisible(next)
-            return true
-        case #selector(NSResponder.moveUp(_:)):
-            let previous = max(tableView.selectedRow - 1, 0)
-            guard !visibleEntries.isEmpty else { return true }
-            tableView.selectRowIndexes(IndexSet(integer: previous), byExtendingSelection: false)
-            tableView.scrollRowToVisible(previous)
-            return true
-        case #selector(NSResponder.insertNewline(_:)):
-            confirmSelection()
-            return true
-        case #selector(NSResponder.cancelOperation(_:)):
-            close()
-            return true
-        default:
-            return false
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        itemForRepresentedObjectAt indexPath: IndexPath
+    ) -> NSCollectionViewItem {
+        let item = collectionView.makeItem(
+            withIdentifier: Self.itemIdentifier,
+            for: indexPath
+        ) as! HistoryCollectionItem
+        item.configure(with: entries[indexPath.item])
+        item.onClick = { [weak self] in
+            self?.selectAndChoose(index: indexPath.item)
         }
+        return item
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        didSelectItemsAt indexPaths: Set<IndexPath>
+    ) {
+        guard !suppressSelectionCallback, let indexPath = indexPaths.first else { return }
+        selectedIndex = indexPath.item
+        chooseEntry(at: indexPath.item)
     }
 }

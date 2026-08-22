@@ -26,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 message: "⇧⌘V 可能已被其他应用占用。你仍可从菜单栏打开 ClipShelf。"
             )
         }
+
+        // Useful for automated UI smoke tests without requiring Accessibility permission.
+        if CommandLine.arguments.contains("--show-history") {
+            DispatchQueue.main.async { [weak self] in
+                self?.showHistory()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -46,8 +53,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         historyWindow.onChoose = { [weak self] entry in
             guard let self else { return }
             self.monitor.write(entry.payload)
-            self.store.promote(entry)
-            self.historyWindow.refresh(entries: self.store.entries)
         }
         historyWindow.onDelete = { [weak self] entry in
             guard let self else { return }
@@ -160,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "ClipShelf",
-            .applicationVersion: "1.0.0",
+            .applicationVersion: "1.1.0",
             .credits: NSAttributedString(string: "轻量、私密的本地剪贴板历史工具。")
         ])
         NSApp.activate(ignoringOtherApps: true)
