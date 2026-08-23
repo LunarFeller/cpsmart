@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "cpsmart",
-            .applicationVersion: "1.5.0",
+            .applicationVersion: "1.6.0",
             .credits: NSAttributedString(string: "轻量、私密的本地剪贴板历史工具。")
         ])
         NSApp.activate(ignoringOtherApps: true)

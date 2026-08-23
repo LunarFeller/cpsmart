@@ -40,7 +40,7 @@ private final class KeyboardCollectionView: NSCollectionView {
 
 private final class ClickableCardView: NSView {
     var onClick: (() -> Void)?
-    var onHover: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
     override func updateTrackingAreas() {
@@ -50,7 +50,7 @@ private final class ClickableCardView: NSView {
         }
         let trackingArea = NSTrackingArea(
             rect: .zero,
-            options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited, .mouseMoved],
+            options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
             owner: self,
             userInfo: nil
         )
@@ -60,11 +60,6 @@ private final class ClickableCardView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         NSCursor.pointingHand.set()
-        onHover?()
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        onHover?()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -72,7 +67,11 @@ private final class ClickableCardView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onClick?()
+        if event.clickCount >= 2 {
+            onDoubleClick?()
+        } else {
+            onClick?()
+        }
     }
 
     override func accessibilityPerformPress() -> Bool {
@@ -85,8 +84,8 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     var onClick: (() -> Void)? {
         didSet { cardView.onClick = onClick }
     }
-    var onHover: (() -> Void)? {
-        didSet { cardView.onHover = onHover }
+    var onDoubleClick: (() -> Void)? {
+        didSet { cardView.onDoubleClick = onDoubleClick }
     }
 
     private let cardView = ClickableCardView()
@@ -632,8 +631,10 @@ final class HistoryWindowController: NSWindowController,
         item.onClick = { [weak self] in
             self?.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: true)
         }
-        item.onHover = { [weak self] in
-            self?.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: false)
+        item.onDoubleClick = { [weak self] in
+            guard let self else { return }
+            self.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: false)
+            self.confirmAndPaste()
         }
         return item
     }
