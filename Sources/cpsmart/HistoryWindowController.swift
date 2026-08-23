@@ -251,7 +251,7 @@ final class HistoryWindowController: NSWindowController,
     NSCollectionViewDelegate
 {
     var onChoose: ((ClipboardEntry) -> Void)?
-    var onPaste: ((NSRunningApplication?) -> Bool)?
+    var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
     var onDelete: ((ClipboardEntry) -> Void)?
 
     private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
@@ -262,7 +262,10 @@ final class HistoryWindowController: NSWindowController,
     private var entries: [ClipboardEntry] = []
     private var selectedIndex = 0
     private var previousApplication: NSRunningApplication?
+    private var lastExternalApplication: NSRunningApplication?
     private var suppressSelectionCallback = false
+    private var keyboardMonitor: Any?
+    private var activationObserver: NSObjectProtocol?
 
     init() {
         let panel = FloatingHistoryPanel(
@@ -282,11 +285,28 @@ final class HistoryWindowController: NSWindowController,
         panel.hidesOnDeactivate = false
 
         super.init(window: panel)
+        rememberExternalApplication(NSWorkspace.shared.frontmostApplication)
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication
+            self?.rememberExternalApplication(application)
+        }
         buildInterface()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        removeKeyboardMonitor()
+        if let activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+        }
     }
 
     func show(entries: [ClipboardEntry]) {
@@ -295,13 +315,20 @@ final class HistoryWindowController: NSWindowController,
             return
         }
 
-        previousApplication = NSWorkspace.shared.frontmostApplication
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        if isExternalApplication(frontmostApplication) {
+            previousApplication = frontmostApplication
+            rememberExternalApplication(frontmostApplication)
+        } else {
+            previousApplication = lastExternalApplication
+        }
         self.entries = entries
         selectedIndex = 0
         reloadCollection(selecting: entries.isEmpty ? nil : 0, notify: false)
 
         guard let window else { return }
         positionWindow(window)
+        installKeyboardMonitor()
         NSApp.activate(ignoringOtherApps: true)
         window.orderFrontRegardless()
         DispatchQueue.main.async { [weak self, weak window] in
@@ -507,12 +534,16 @@ final class HistoryWindowController: NSWindowController,
     private func confirmAndPaste() {
         guard entries.indices.contains(selectedIndex) else { return }
         onChoose?(entries[selectedIndex])
-        let pasteStarted = onPaste?(previousApplication) ?? false
-        if pasteStarted {
-            window?.orderOut(nil)
-            previousApplication = nil
-        } else {
-            selectionLabel.stringValue = "请先允许“辅助功能”权限，然后再次按回车"
+        let result = onPaste?(previousApplication) ?? .targetUnavailable
+        switch result {
+        case .started:
+            dismiss(restorePreviousApplication: false)
+        case .permissionRequired:
+            selectionLabel.stringValue = "当前版本的权限未生效，请删除系统设置中的 cpsmart 后重新添加"
+            selectionLabel.textColor = .systemOrange
+            NSSound.beep()
+        case .targetUnavailable:
+            selectionLabel.stringValue = "无法找到刚才使用的应用，请关闭浮窗后重试"
             selectionLabel.textColor = .systemOrange
             NSSound.beep()
         }
@@ -524,13 +555,62 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func dismiss(restorePreviousApplication: Bool) {
+        removeKeyboardMonitor()
         window?.orderOut(nil)
         if restorePreviousApplication,
            let previousApplication,
-           previousApplication.bundleIdentifier != Bundle.main.bundleIdentifier {
+           previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication.activate(options: [.activateIgnoringOtherApps])
         }
         previousApplication = nil
+    }
+
+    private func installKeyboardMonitor() {
+        removeKeyboardMonitor()
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak self] event in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.handleKeyboardEvent(event) else {
+                return event
+            }
+            return nil
+        }
+    }
+
+    private func removeKeyboardMonitor() {
+        if let keyboardMonitor {
+            NSEvent.removeMonitor(keyboardMonitor)
+            self.keyboardMonitor = nil
+        }
+    }
+
+    private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 123:
+            moveSelection(by: -1)
+        case 124:
+            moveSelection(by: 1)
+        case 36, 76:
+            confirmAndPaste()
+        case 51, 117:
+            deleteSelection()
+        case 53:
+            dismiss(restorePreviousApplication: true)
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func rememberExternalApplication(_ application: NSRunningApplication?) {
+        guard isExternalApplication(application) else { return }
+        lastExternalApplication = application
+    }
+
+    private func isExternalApplication(_ application: NSRunningApplication?) -> Bool {
+        guard let application, !application.isTerminated else { return false }
+        return application.processIdentifier != ProcessInfo.processInfo.processIdentifier
     }
 
     func collectionView(

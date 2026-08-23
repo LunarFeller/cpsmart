@@ -19,13 +19,15 @@ cpsmart 是一个轻量的原生 macOS 菜单栏剪贴板历史工具。它在�
 
 ## 安装
 
-1. 打开 `dist/cpsmart-1.4.0-universal.dmg`。
+1. 打开 `dist/cpsmart-1.5.0-universal.dmg`。
 2. 把 `cpsmart.app` 拖到 `Applications`。
 3. 从“应用程序”启动 cpsmart，菜单栏会出现剪贴板图标。
 
 当前构建使用 ad-hoc 本地签名，适合在本机安装。若要公开分发，需要 Apple Developer ID 证书并完成 notarization（公证）。
 
 第一次使用“回车直接粘贴”时，macOS 会请求“辅助功能”权限。请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 cpsmart；该权限只用于向你原来所在的应用发送一次 `⌘V`。
+
+当前安装包使用 ad-hoc 本地签名。安装新版本后，如果系统设置仍显示 cpsmart 已开启但回车无法粘贴，请先在“辅助功能”列表中删除旧记录，再把当前 `/Applications/cpsmart.app` 重新添加并开启。
 
 ## 开发与构建
 

@@ -1,24 +1,32 @@
 import AppKit
-import ApplicationServices
 import Carbon.HIToolbox
 
+enum PasteStartResult {
+    case started
+    case permissionRequired
+    case targetUnavailable
+}
+
 final class PasteController {
-    func paste(to targetApplication: NSRunningApplication?) -> Bool {
-        guard requestAccessibilityAccessIfNeeded() else { return false }
+    func paste(to targetApplication: NSRunningApplication?) -> PasteStartResult {
         guard let targetApplication,
-              targetApplication.bundleIdentifier != Bundle.main.bundleIdentifier else {
-            return false
+              !targetApplication.isTerminated,
+              targetApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return .targetUnavailable
         }
 
-        targetApplication.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-        postPasteWhenApplicationIsActive(targetApplication, remainingAttempts: 5)
-        return true
-    }
+        guard CGPreflightPostEventAccess() else {
+            _ = CGRequestPostEventAccess()
+            return .permissionRequired
+        }
 
-    private func requestAccessibilityAccessIfNeeded() -> Bool {
-        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [promptKey: true] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
+        guard targetApplication.activate(
+            options: [.activateAllWindows, .activateIgnoringOtherApps]
+        ) else {
+            return .targetUnavailable
+        }
+        postPasteWhenApplicationIsActive(targetApplication, remainingAttempts: 12)
+        return .started
     }
 
     private func postPasteWhenApplicationIsActive(
@@ -28,8 +36,8 @@ final class PasteController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
             guard let self else { return }
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-            if frontmostPID == application.processIdentifier {
-                self.postCommandV()
+            if frontmostPID == application.processIdentifier || remainingAttempts == 0 {
+                self.postCommandV(to: application.processIdentifier)
             } else if remainingAttempts > 0 {
                 application.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
                 self.postPasteWhenApplicationIsActive(
@@ -40,8 +48,8 @@ final class PasteController {
         }
     }
 
-    private func postCommandV() {
-        guard let source = CGEventSource(stateID: .hidSystemState),
+    private func postCommandV(to processID: pid_t) {
+        guard let source = CGEventSource(stateID: .combinedSessionState),
               let keyDown = CGEvent(
                   keyboardEventSource: source,
                   virtualKey: CGKeyCode(kVK_ANSI_V),
@@ -57,7 +65,7 @@ final class PasteController {
 
         keyDown.flags = [.maskCommand]
         keyUp.flags = [.maskCommand]
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
+        keyDown.postToPid(processID)
+        keyUp.postToPid(processID)
     }
 }

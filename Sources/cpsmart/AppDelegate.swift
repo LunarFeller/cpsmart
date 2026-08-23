@@ -56,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.monitor.write(entry.payload)
         }
         historyWindow.onPaste = { [weak self] targetApplication in
-            self?.pasteController.paste(to: targetApplication) ?? false
+            self?.pasteController.paste(to: targetApplication) ?? .targetUnavailable
         }
         historyWindow.onDelete = { [weak self] entry in
             guard let self else { return }
@@ -169,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "cpsmart",
-            .applicationVersion: "1.4.0",
+            .applicationVersion: "1.5.0",
             .credits: NSAttributedString(string: "轻量、私密的本地剪贴板历史工具。")
         ])
         NSApp.activate(ignoringOtherApps: true)
