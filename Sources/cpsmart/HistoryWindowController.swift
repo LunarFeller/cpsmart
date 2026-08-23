@@ -5,6 +5,12 @@ private final class FloatingHistoryPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+private final class InvisibleScroller: NSScroller {
+    override func draw(_ dirtyRect: NSRect) {}
+    override func drawKnob() {}
+    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {}
+}
+
 private final class KeyboardCollectionView: NSCollectionView {
     var onMoveLeft: (() -> Void)?
     var onMoveRight: (() -> Void)?
@@ -94,7 +100,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
 
     override func loadView() {
         cardView.wantsLayer = true
-        cardView.layer?.cornerRadius = 12
+        cardView.layer?.cornerRadius = 10
         cardView.layer?.borderWidth = 1
         cardView.layer?.masksToBounds = true
         cardView.setAccessibilityRole(.button)
@@ -102,19 +108,20 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
 
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.imageScaling = .scaleProportionallyDown
-        iconView.contentTintColor = .secondaryLabelColor
+        iconView.contentTintColor = Self.secondaryTextColor
         iconView.wantsLayer = true
-        iconView.layer?.cornerRadius = 6
+        iconView.layer?.cornerRadius = 5
         iconView.layer?.masksToBounds = true
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = Self.primaryTextColor
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.maximumNumberOfLines = 3
+        titleLabel.maximumNumberOfLines = 5
 
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
-        detailLabel.font = .systemFont(ofSize: 10)
-        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        detailLabel.textColor = Self.secondaryTextColor
         detailLabel.lineBreakMode = .byTruncatingTail
         detailLabel.maximumNumberOfLines = 1
 
@@ -123,19 +130,19 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         cardView.addSubview(detailLabel)
 
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
-            iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 12),
-            iconView.widthAnchor.constraint(equalToConstant: 28),
-            iconView.heightAnchor.constraint(equalToConstant: 28),
+            iconView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 14),
+            iconView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 13),
+            iconView.widthAnchor.constraint(equalToConstant: 24),
+            iconView.heightAnchor.constraint(equalToConstant: 24),
 
             detailLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
-            detailLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -10),
+            detailLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -14),
             detailLabel.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
 
-            titleLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
-            titleLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 8),
-            titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: cardView.bottomAnchor, constant: -10)
+            titleLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 14),
+            titleLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -14),
+            titleLabel.topAnchor.constraint(equalTo: iconView.bottomAnchor, constant: 10),
+            titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: cardView.bottomAnchor, constant: -12)
         ])
 
         updateSelectionAppearance()
@@ -174,17 +181,13 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     private func updateSelectionAppearance() {
         guard isViewLoaded else { return }
         if isSelected {
-            cardView.layer?.borderWidth = 2
-            cardView.layer?.borderColor = NSColor.controlAccentColor.cgColor
-            cardView.layer?.backgroundColor = NSColor.controlAccentColor
-                .withAlphaComponent(0.16)
-                .cgColor
+            cardView.layer?.borderWidth = 1.5
+            cardView.layer?.borderColor = Self.accentColor.cgColor
+            cardView.layer?.backgroundColor = Self.selectedBackgroundColor.cgColor
         } else {
             cardView.layer?.borderWidth = 1
-            cardView.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
-            cardView.layer?.backgroundColor = NSColor.controlBackgroundColor
-                .withAlphaComponent(0.58)
-                .cgColor
+            cardView.layer?.borderColor = Self.cardBorderColor.cgColor
+            cardView.layer?.backgroundColor = Self.cardBackgroundColor.cgColor
         }
     }
 
@@ -193,9 +196,41 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .prefix(3)
+            .prefix(5)
             .joined(separator: "\n")
     }
+
+    private static let primaryTextColor = NSColor(
+        srgbRed: 0.93,
+        green: 0.95,
+        blue: 0.98,
+        alpha: 1
+    )
+    private static let secondaryTextColor = NSColor(
+        srgbRed: 0.55,
+        green: 0.60,
+        blue: 0.68,
+        alpha: 1
+    )
+    private static let cardBackgroundColor = NSColor(
+        srgbRed: 0.09,
+        green: 0.10,
+        blue: 0.12,
+        alpha: 0.96
+    )
+    private static let cardBorderColor = NSColor.white.withAlphaComponent(0.11)
+    private static let selectedBackgroundColor = NSColor(
+        srgbRed: 0.08,
+        green: 0.15,
+        blue: 0.24,
+        alpha: 1
+    )
+    private static let accentColor = NSColor(
+        srgbRed: 0.18,
+        green: 0.52,
+        blue: 0.96,
+        alpha: 1
+    )
 
     private static let relativeDate: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -222,7 +257,7 @@ final class HistoryWindowController: NSWindowController,
     private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
     private let collectionView = KeyboardCollectionView()
     private let countLabel = NSTextField(labelWithString: "")
-    private let selectionLabel = NSTextField(labelWithString: "选择后立即写入系统剪贴板")
+    private let selectionLabel = NSTextField(labelWithString: "")
     private let emptyLabel = NSTextField(labelWithString: "还没有记录 · 先复制一些文本、图片或文件")
     private var entries: [ClipboardEntry] = []
     private var selectedIndex = 0
@@ -237,6 +272,7 @@ final class HistoryWindowController: NSWindowController,
             defer: false
         )
         panel.title = "cpsmart 剪贴板历史"
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -296,26 +332,30 @@ final class HistoryWindowController: NSWindowController,
     private func buildInterface() {
         guard let contentView = window?.contentView else { return }
 
-        let effectView = NSVisualEffectView()
+        let effectView = NSView()
         effectView.translatesAutoresizingMaskIntoConstraints = false
-        effectView.material = .hudWindow
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
         effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 18
+        effectView.layer?.backgroundColor = NSColor(
+            srgbRed: 0.035,
+            green: 0.040,
+            blue: 0.050,
+            alpha: 1
+        ).cgColor
+        effectView.layer?.cornerRadius = 16
         effectView.layer?.masksToBounds = true
         contentView.addSubview(effectView)
 
         let titleLabel = NSTextField(labelWithString: "cpsmart")
-        titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = NSColor.white.withAlphaComponent(0.94)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        countLabel.font = .systemFont(ofSize: 11)
-        countLabel.textColor = .secondaryLabelColor
+        countLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        countLabel.textColor = NSColor.white.withAlphaComponent(0.42)
         countLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        selectionLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        selectionLabel.textColor = .secondaryLabelColor
+        selectionLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        selectionLabel.textColor = NSColor.white.withAlphaComponent(0.48)
         selectionLabel.alignment = .right
         selectionLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -324,13 +364,16 @@ final class HistoryWindowController: NSWindowController,
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.horizontalScrollElasticity = .automatic
+        scrollView.horizontalScroller = InvisibleScroller()
         scrollView.drawsBackground = false
 
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
-        layout.itemSize = NSSize(width: 180, height: 112)
-        layout.minimumInteritemSpacing = 10
-        layout.minimumLineSpacing = 10
+        layout.itemSize = NSSize(width: 214, height: 150)
+        layout.minimumInteritemSpacing = 8
+        layout.minimumLineSpacing = 8
         layout.sectionInset = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
 
         collectionView.collectionViewLayout = layout
@@ -354,21 +397,14 @@ final class HistoryWindowController: NSWindowController,
 
         emptyLabel.alignment = .center
         emptyLabel.font = .systemFont(ofSize: 13)
-        emptyLabel.textColor = .secondaryLabelColor
+        emptyLabel.textColor = NSColor.white.withAlphaComponent(0.42)
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let helpLabel = NSTextField(labelWithString: "移动鼠标或 ← → 选择   ·   ↩ 直接粘贴   ·   ⌫ 删除   ·   Esc 关闭")
-        helpLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        helpLabel.textColor = .tertiaryLabelColor
-        helpLabel.alignment = .center
-        helpLabel.translatesAutoresizingMaskIntoConstraints = false
 
         effectView.addSubview(titleLabel)
         effectView.addSubview(countLabel)
         effectView.addSubview(selectionLabel)
         effectView.addSubview(scrollView)
         effectView.addSubview(emptyLabel)
-        effectView.addSubview(helpLabel)
 
         NSLayoutConstraint.activate([
             effectView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -376,28 +412,23 @@ final class HistoryWindowController: NSWindowController,
             effectView.topAnchor.constraint(equalTo: contentView.topAnchor),
             effectView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
-            titleLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 18),
-            titleLabel.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 14),
+            titleLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 16),
+            titleLabel.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 12),
 
             countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
             countLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
 
-            selectionLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -18),
+            selectionLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -16),
             selectionLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
             selectionLabel.leadingAnchor.constraint(greaterThanOrEqualTo: countLabel.trailingAnchor, constant: 12),
 
-            scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 14),
-            scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -14),
+            scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 12),
+            scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -12),
             scrollView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            scrollView.heightAnchor.constraint(equalToConstant: 124),
+            scrollView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor, constant: -10),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
-
-            helpLabel.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 18),
-            helpLabel.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -18),
-            helpLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 8),
-            helpLabel.bottomAnchor.constraint(lessThanOrEqualTo: effectView.bottomAnchor, constant: -10)
+            emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor)
         ])
     }
 
@@ -420,7 +451,7 @@ final class HistoryWindowController: NSWindowController,
         suppressSelectionCallback = true
         collectionView.reloadData()
         emptyLabel.isHidden = !entries.isEmpty
-        countLabel.stringValue = "\(entries.count) 条"
+        countLabel.stringValue = "\(entries.count) 项"
 
         if let index, entries.indices.contains(index) {
             selectedIndex = index
@@ -435,8 +466,8 @@ final class HistoryWindowController: NSWindowController,
         if notify, let index, entries.indices.contains(index) {
             chooseEntry(at: index)
         } else {
-            selectionLabel.stringValue = "选择后立即写入系统剪贴板"
-            selectionLabel.textColor = .secondaryLabelColor
+            selectionLabel.stringValue = ""
+            selectionLabel.textColor = NSColor.white.withAlphaComponent(0.48)
         }
     }
 
@@ -464,8 +495,13 @@ final class HistoryWindowController: NSWindowController,
         guard entries.indices.contains(index) else { return }
         let entry = entries[index]
         onChoose?(entry)
-        selectionLabel.stringValue = "✓ 已选中第 \(index + 1) 条 · 回车直接粘贴"
-        selectionLabel.textColor = .controlAccentColor
+        selectionLabel.stringValue = "已选择 \(index + 1) / \(entries.count)"
+        selectionLabel.textColor = NSColor(
+            srgbRed: 0.35,
+            green: 0.65,
+            blue: 1,
+            alpha: 1
+        )
     }
 
     private func confirmAndPaste() {
