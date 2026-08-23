@@ -4,6 +4,7 @@ import ServiceManagement
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = HistoryStore()
     private let monitor = ClipboardMonitor()
+    private let pasteController = PasteController()
     private let historyWindow = HistoryWindowController()
     private var hotKey: GlobalHotKey?
     private var statusItem: NSStatusItem!
@@ -53,6 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         historyWindow.onChoose = { [weak self] entry in
             guard let self else { return }
             self.monitor.write(entry.payload)
+        }
+        historyWindow.onPaste = { [weak self] targetApplication in
+            self?.pasteController.paste(to: targetApplication) ?? false
         }
         historyWindow.onDelete = { [weak self] entry in
             guard let self else { return }
@@ -165,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "ClipShelf",
-            .applicationVersion: "1.1.0",
+            .applicationVersion: "1.2.0",
             .credits: NSAttributedString(string: "轻量、私密的本地剪贴板历史工具。")
         ])
         NSApp.activate(ignoringOtherApps: true)

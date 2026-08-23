@@ -11,7 +11,7 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
-DMG_PATH="$DIST_DIR/ClipShelf-1.1.0-universal.dmg"
+DMG_PATH="$DIST_DIR/ClipShelf-1.2.0-universal.dmg"
 SDK_PATH="${CLIPSHELF_SDK_PATH:-}"
 
 if [[ -z "$SDK_PATH" && -d /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk ]]; then
