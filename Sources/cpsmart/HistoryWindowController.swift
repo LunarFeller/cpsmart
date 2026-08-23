@@ -1,5 +1,4 @@
 import AppKit
-import QuartzCore
 
 private final class FloatingHistoryPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -172,28 +171,6 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         cardView.setAccessibilityLabel(titleLabel.stringValue)
     }
 
-    func setMagnification(_ scale: CGFloat, zPosition: CGFloat) {
-        guard isViewLoaded, let layer = cardView.layer else { return }
-        let currentScale = (layer.presentation()?.value(forKeyPath: "transform.scale") as? NSNumber)?
-            .doubleValue ?? 1
-        guard abs(currentScale - Double(scale)) > 0.002 || layer.zPosition != zPosition else {
-            return
-        }
-
-        let animation = CASpringAnimation(keyPath: "transform.scale")
-        animation.fromValue = currentScale
-        animation.toValue = scale
-        animation.mass = 0.72
-        animation.stiffness = 260
-        animation.damping = 20
-        animation.initialVelocity = 0
-        animation.duration = min(animation.settlingDuration, 0.28)
-
-        layer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-        layer.zPosition = zPosition
-        layer.add(animation, forKey: "dockMagnification")
-    }
-
     private func updateSelectionAppearance() {
         guard isViewLoaded else { return }
         if isSelected {
@@ -254,12 +231,12 @@ final class HistoryWindowController: NSWindowController,
 
     init() {
         let panel = FloatingHistoryPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 236),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 210),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
-        panel.title = "ClipShelf 剪贴板历史"
+        panel.title = "cpsmart 剪贴板历史"
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -329,7 +306,7 @@ final class HistoryWindowController: NSWindowController,
         effectView.layer?.masksToBounds = true
         contentView.addSubview(effectView)
 
-        let titleLabel = NSTextField(labelWithString: "剪贴板历史")
+        let titleLabel = NSTextField(labelWithString: "cpsmart")
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -351,10 +328,10 @@ final class HistoryWindowController: NSWindowController,
 
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .horizontal
-        layout.itemSize = NSSize(width: 176, height: 106)
+        layout.itemSize = NSSize(width: 180, height: 112)
         layout.minimumInteritemSpacing = 10
         layout.minimumLineSpacing = 10
-        layout.sectionInset = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
 
         collectionView.collectionViewLayout = layout
         collectionView.dataSource = self
@@ -412,7 +389,7 @@ final class HistoryWindowController: NSWindowController,
             scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 14),
             scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -14),
             scrollView.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            scrollView.heightAnchor.constraint(equalToConstant: 150),
+            scrollView.heightAnchor.constraint(equalToConstant: 124),
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
@@ -430,11 +407,11 @@ final class HistoryWindowController: NSWindowController,
             ?? NSScreen.main
         guard let visibleFrame = screen?.visibleFrame else { return }
 
-        let width = min(900, max(500, visibleFrame.width - 48))
-        let height: CGFloat = 236
+        let width = visibleFrame.width
+        let height: CGFloat = 210
         let origin = NSPoint(
-            x: visibleFrame.midX - width / 2,
-            y: visibleFrame.minY + 24
+            x: visibleFrame.minX,
+            y: visibleFrame.minY
         )
         window.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
     }
@@ -455,10 +432,6 @@ final class HistoryWindowController: NSWindowController,
             collectionView.selectionIndexPaths = []
         }
         suppressSelectionCallback = false
-        DispatchQueue.main.async { [weak self] in
-            self?.updateDockMagnification()
-        }
-
         if notify, let index, entries.indices.contains(index) {
             chooseEntry(at: index)
         } else {
@@ -483,7 +456,6 @@ final class HistoryWindowController: NSWindowController,
         collectionView.selectionIndexPaths = [indexPath]
         collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
         suppressSelectionCallback = false
-        updateDockMagnification()
         chooseEntry(at: index)
         window?.makeFirstResponder(collectionView)
     }
@@ -507,30 +479,6 @@ final class HistoryWindowController: NSWindowController,
             selectionLabel.stringValue = "请先允许“辅助功能”权限，然后再次按回车"
             selectionLabel.textColor = .systemOrange
             NSSound.beep()
-        }
-    }
-
-    private func updateDockMagnification() {
-        for collectionItem in collectionView.visibleItems() {
-            guard let item = collectionItem as? HistoryCollectionItem,
-                  let indexPath = collectionView.indexPath(for: item) else {
-                continue
-            }
-            let distance = abs(indexPath.item - selectedIndex)
-            let scale: CGFloat
-            let zPosition: CGFloat
-            switch distance {
-            case 0:
-                scale = 1.16
-                zPosition = 20
-            case 1:
-                scale = 1.07
-                zPosition = 10
-            default:
-                scale = 1
-                zPosition = 0
-            }
-            item.setMagnification(scale, zPosition: zPosition)
         }
     }
 
@@ -580,7 +528,6 @@ final class HistoryWindowController: NSWindowController,
     ) {
         guard !suppressSelectionCallback, let indexPath = indexPaths.first else { return }
         selectedIndex = indexPath.item
-        updateDockMagnification()
         chooseEntry(at: indexPath.item)
     }
 }

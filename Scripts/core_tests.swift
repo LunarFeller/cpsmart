@@ -4,7 +4,7 @@ import Foundation
 struct CoreTests {
     static func main() throws {
         let temporaryDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ClipShelfTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("cpsmartTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: temporaryDirectory,
             withIntermediateDirectories: true
@@ -15,7 +15,7 @@ struct CoreTests {
         try testPersistence(in: temporaryDirectory)
         try testLimits(in: temporaryDirectory)
         try testRemoveAndClear(in: temporaryDirectory)
-        print("All ClipShelf core tests passed.")
+        print("All cpsmart core tests passed.")
     }
 
     private static func testDeduplication(in directory: URL) throws {
@@ -103,7 +103,7 @@ struct CoreTests {
     ) throws {
         guard condition() else {
             throw NSError(
-                domain: "ClipShelfCoreTests",
+                domain: "cpsmartCoreTests",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: message]
             )

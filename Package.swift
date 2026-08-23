@@ -3,17 +3,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClipShelf",
+    name: "cpsmart",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "ClipShelf", targets: ["ClipShelf"])
+        .executable(name: "cpsmart", targets: ["cpsmart"])
     ],
     targets: [
         .executableTarget(
-            name: "ClipShelf",
-            path: "Sources/ClipShelf"
+            name: "cpsmart",
+            path: "Sources/cpsmart"
         )
     ]
 )

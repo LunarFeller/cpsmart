@@ -24,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if hotKey == nil {
             showAlert(
                 title: "快捷键注册失败",
-                message: "⇧⌘V 可能已被其他应用占用。你仍可从菜单栏打开 ClipShelf。"
+                message: "⇧⌘V 可能已被其他应用占用。你仍可从菜单栏打开 cpsmart。"
             )
         }
 
@@ -70,9 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let button = statusItem.button {
             button.image = NSImage(
                 systemSymbolName: "doc.on.clipboard",
-                accessibilityDescription: "ClipShelf"
+                accessibilityDescription: "cpsmart"
             )
-            button.toolTip = "ClipShelf 剪贴板历史"
+            button.toolTip = "cpsmart 剪贴板历史"
         }
 
         let menu = NSMenu()
@@ -105,12 +105,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
-            title: "关于 ClipShelf",
+            title: "关于 cpsmart",
             action: #selector(showAbout),
             keyEquivalent: ""
         ))
         menu.addItem(NSMenuItem(
-            title: "退出 ClipShelf",
+            title: "退出 cpsmart",
             action: #selector(quit),
             keyEquivalent: "q"
         ))
@@ -149,7 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             showAlert(
                 title: "无法更改登录启动设置",
-                message: "请先把 ClipShelf 拖入“应用程序”文件夹，然后重试。\n\n\(error.localizedDescription)"
+                message: "请先把 cpsmart 拖入“应用程序”文件夹，然后重试。\n\n\(error.localizedDescription)"
             )
         }
     }
@@ -168,8 +168,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showAbout() {
         NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "ClipShelf",
-            .applicationVersion: "1.2.0",
+            .applicationName: "cpsmart",
+            .applicationVersion: "1.3.0",
             .credits: NSAttributedString(string: "轻量、私密的本地剪贴板历史工具。")
         ])
         NSApp.activate(ignoringOtherApps: true)

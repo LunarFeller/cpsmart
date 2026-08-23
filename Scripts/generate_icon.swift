@@ -39,7 +39,7 @@ func makeIcon(size: Int) throws -> Data {
         bytesPerRow: 0,
         bitsPerPixel: 0
     ), let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap) else {
-        throw NSError(domain: "ClipShelfIcon", code: 1)
+        throw NSError(domain: "cpsmartIcon", code: 1)
     }
 
     NSGraphicsContext.saveGraphicsState()
@@ -104,7 +104,7 @@ func makeIcon(size: Int) throws -> Data {
     }
 
     guard let png = bitmap.representation(using: .png, properties: [:]) else {
-        throw NSError(domain: "ClipShelfIcon", code: 2)
+        throw NSError(domain: "cpsmartIcon", code: 2)
     }
     return png
 }

@@ -17,7 +17,11 @@ final class HistoryStore {
         self.maximumEntryCount = maximumEntryCount
         self.maximumStorageBytes = maximumStorageBytes
         self.fileManager = fileManager
-        self.fileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
+        let resolvedFileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
+        self.fileURL = resolvedFileURL
+        if fileURL == nil {
+            Self.migrateLegacyHistoryIfNeeded(to: resolvedFileURL, fileManager: fileManager)
+        }
         load()
     }
 
@@ -85,7 +89,7 @@ final class HistoryStore {
             try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
             try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
         } catch {
-            NSLog("ClipShelf could not save clipboard history: %@", error.localizedDescription)
+            NSLog("cpsmart could not save clipboard history: %@", error.localizedDescription)
         }
     }
 
@@ -95,8 +99,31 @@ final class HistoryStore {
             in: .userDomainMask
         ).first!
         return applicationSupport
+            .appendingPathComponent("cpsmart", isDirectory: true)
+            .appendingPathComponent("history.json", isDirectory: false)
+    }
+
+    private static func migrateLegacyHistoryIfNeeded(to destination: URL, fileManager: FileManager) {
+        guard !fileManager.fileExists(atPath: destination.path) else { return }
+        let applicationSupport = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first!
+        let legacyFile = applicationSupport
             .appendingPathComponent("ClipShelf", isDirectory: true)
             .appendingPathComponent("history.json", isDirectory: false)
+        guard fileManager.fileExists(atPath: legacyFile.path) else { return }
+
+        do {
+            try fileManager.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try fileManager.copyItem(at: legacyFile, to: destination)
+        } catch {
+            NSLog("cpsmart could not migrate clipboard history: %@", error.localizedDescription)
+        }
     }
 
     private static let encoder: JSONEncoder = {

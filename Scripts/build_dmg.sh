@@ -5,14 +5,14 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 DIST_DIR="$PROJECT_DIR/dist"
-APP_DIR="$BUILD_DIR/ClipShelf.app"
+APP_DIR="$BUILD_DIR/cpsmart.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
-DMG_PATH="$DIST_DIR/ClipShelf-1.2.0-universal.dmg"
-SDK_PATH="${CLIPSHELF_SDK_PATH:-}"
+DMG_PATH="$DIST_DIR/cpsmart-1.3.0-universal.dmg"
+SDK_PATH="${CPSMART_SDK_PATH:-}"
 
 if [[ -z "$SDK_PATH" && -d /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk ]]; then
     SDK_PATH="/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk"
@@ -35,17 +35,17 @@ build_architecture() {
         --package-path "$PROJECT_DIR" \
         --disable-sandbox \
         --configuration release \
-        --product ClipShelf \
+        --product cpsmart \
         --triple "$architecture-apple-macosx13.0" \
         --scratch-path "$scratch_path"
-    echo "$scratch_path/$architecture-apple-macosx/release/ClipShelf"
+    echo "$scratch_path/$architecture-apple-macosx/release/cpsmart"
 }
 
 X86_BINARY="$(build_architecture x86_64 | tail -n 1)"
 ARM_BINARY="$(build_architecture arm64 | tail -n 1)"
 
-lipo -create "$X86_BINARY" "$ARM_BINARY" -output "$MACOS_DIR/ClipShelf"
-chmod 755 "$MACOS_DIR/ClipShelf"
+lipo -create "$X86_BINARY" "$ARM_BINARY" -output "$MACOS_DIR/cpsmart"
+chmod 755 "$MACOS_DIR/cpsmart"
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 
 rm -rf "$ICONSET_DIR"
@@ -60,12 +60,12 @@ codesign --verify --deep --strict "$APP_DIR"
 
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
-ditto "$APP_DIR" "$STAGING_DIR/ClipShelf.app"
+ditto "$APP_DIR" "$STAGING_DIR/cpsmart.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 rm -f "$DMG_PATH"
 hdiutil create \
-    -volname "ClipShelf 安装" \
+    -volname "cpsmart 安装" \
     -srcfolder "$STAGING_DIR" \
     -format UDZO \
     -ov \
