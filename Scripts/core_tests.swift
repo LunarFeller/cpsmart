@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 
 @main
@@ -32,6 +33,11 @@ struct CoreTests {
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
         try testAdaptivePreviewSizing()
+        try testShortcutDefaultsAndValidation()
+        try testShortcutPersistenceAndReset()
+        try testShortcutResetSwapAndNavigationPreset()
+        try testShortcutMatcherContexts()
+        try testInvalidShortcutPersistenceFallsBackToDefaults()
         print("All cpsmart core tests passed.")
     }
 
@@ -549,6 +555,252 @@ struct CoreTests {
                 && reloaded.entries.first?.isPinned == true,
             "keepDays removed a pinned entry"
         )
+    }
+
+    private static func testShortcutDefaultsAndValidation() throws {
+        let suiteName = "cpsmartTests-shortcutDefaults-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+
+        try require(
+            shortcuts.displayString(for: .toggleHistory) == "⇧⌘V",
+            "default global shortcut display changed"
+        )
+        try require(
+            shortcuts.bindings(for: .pasteSelection).count == 2,
+            "Return and keypad Enter defaults were not both preserved"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_UpArrow)),
+                for: .selectPrevious
+            ) == nil,
+            "an unmodified arrow key was rejected"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_A)),
+                for: .selectPrevious
+            ) == .requiresModifier,
+            "an unmodified text key was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_A), modifiers: [.shift]),
+                for: .toggleHistory
+            ) == .globalRequiresModifier,
+            "a shift-only global shortcut was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command]),
+                for: .toggleQuickLook
+            ) == .reservedByApplication,
+            "Command-Q was accepted as a configurable shortcut"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command]),
+                for: .toggleQuickLook
+            ) == .reservedByApplication,
+            "standard Command-C editing shortcut was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_RightArrow)),
+                for: .selectPrevious
+            ) == .conflictsWith(.selectNext),
+            "duplicate shortcut conflict was not detected"
+        )
+    }
+
+    private static func testShortcutPersistenceAndReset() throws {
+        let suiteName = "cpsmartTests-shortcutPersistence-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+
+        let up = ShortcutGesture(keyCode: UInt16(kVK_UpArrow))
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        try require(
+            shortcuts.set(up, for: .selectPrevious) == nil,
+            "valid shortcut override was rejected"
+        )
+        try require(shortcuts.hasCustomizations, "customization state was not recorded")
+
+        let reloaded = ShortcutStore(userDefaults: settings)
+        try require(
+            reloaded.bindings(for: .selectPrevious) == [up],
+            "shortcut override did not persist"
+        )
+        let left = ShortcutGesture(keyCode: UInt16(kVK_LeftArrow))
+        try require(
+            reloaded.set(left, for: .selectPrevious) == nil
+                && !reloaded.hasCustomizations
+                && settings.data(forKey: ShortcutStore.defaultsKey) == nil,
+            "recording the single default binding did not clear its override"
+        )
+        try require(
+            reloaded.set(up, for: .selectPrevious) == nil,
+            "shortcut could not be customized again after returning to default"
+        )
+        reloaded.resetToDefaults()
+        try require(
+            !reloaded.hasCustomizations
+                && reloaded.primaryBinding(for: .selectPrevious).keyCode == UInt16(kVK_LeftArrow)
+                && settings.data(forKey: ShortcutStore.defaultsKey) == nil,
+            "reset did not remove persisted overrides and restore defaults"
+        )
+    }
+
+    private static func testShortcutResetSwapAndNavigationPreset() throws {
+        let suiteName = "cpsmartTests-shortcutEditing-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+
+        let left = ShortcutGesture(keyCode: UInt16(kVK_LeftArrow))
+        let right = ShortcutGesture(keyCode: UInt16(kVK_RightArrow))
+        let up = ShortcutGesture(keyCode: UInt16(kVK_UpArrow))
+        let down = ShortcutGesture(keyCode: UInt16(kVK_DownArrow))
+
+        try require(
+            shortcuts.swap(
+                .selectPrevious,
+                with: .selectNext,
+                requestedGesture: right
+            ) == nil
+                && shortcuts.primaryBinding(for: .selectPrevious) == right
+                && shortcuts.primaryBinding(for: .selectNext) == left
+                && shortcuts.customizationCount == 2,
+            "conflicting navigation shortcuts were not swapped atomically"
+        )
+        try require(
+            shortcuts.validateReset(for: .selectPrevious) == .conflictsWith(.selectNext),
+            "single-action reset did not detect a conflict with the current bindings"
+        )
+        try require(
+            shortcuts.applyNavigationPreset(previous: up, next: down) == nil
+                && shortcuts.primaryBinding(for: .selectPrevious) == up
+                && shortcuts.primaryBinding(for: .selectNext) == down,
+            "vertical navigation preset was not applied atomically"
+        )
+        try require(
+            shortcuts.resetToDefault(.selectPrevious) == nil
+                && shortcuts.primaryBinding(for: .selectPrevious) == left
+                && !shortcuts.isCustomized(.selectPrevious)
+                && shortcuts.isCustomized(.selectNext),
+            "single-action reset did not restore only the requested shortcut"
+        )
+
+        let globalGesture = shortcuts.primaryBinding(for: .toggleHistory)
+        try require(
+            shortcuts.validateSwap(
+                .selectPrevious,
+                with: .toggleHistory,
+                requestedGesture: globalGesture
+            ) == .globalRequiresModifier,
+            "swap allowed an unmodified key to become the global shortcut"
+        )
+    }
+
+    private static func testShortcutMatcherContexts() throws {
+        let suiteName = "cpsmartTests-shortcutMatcher-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        let matcher = ShortcutMatcher(store: shortcuts)
+
+        let left = makeKeyEvent(keyCode: UInt16(kVK_LeftArrow), characters: "")
+        try require(
+            matcher.action(for: left, context: .browsing) == .selectPrevious,
+            "left arrow did not resolve in browsing context"
+        )
+        try require(
+            matcher.action(for: left, context: .searching) == nil,
+            "left arrow intercepted search field navigation"
+        )
+
+        let tab = makeKeyEvent(keyCode: UInt16(kVK_Tab), characters: "\t")
+        try require(
+            matcher.action(for: tab, context: .searching) == .toggleSearchFocus,
+            "Tab did not resolve in search context"
+        )
+        try require(
+            matcher.action(for: tab, context: .composingSearchText) == nil,
+            "Tab intercepted input method composition"
+        )
+
+        let commandOne = makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_1),
+            modifiers: [.command],
+            characters: "1"
+        )
+        try require(
+            matcher.action(for: commandOne, context: .composingSearchText) == .filterAll,
+            "explicit Command shortcut stopped working during input method composition"
+        )
+
+        let optionCommandP = makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_P),
+            modifiers: [.option, .command],
+            characters: "p"
+        )
+        try require(
+            matcher.action(for: optionCommandP, context: .browsing) == nil,
+            "shortcut matching ignored extra modifiers"
+        )
+
+        let optionUp = ShortcutGesture(keyCode: UInt16(kVK_UpArrow), modifiers: [.option])
+        try require(
+            shortcuts.set(optionUp, for: .togglePin) == nil,
+            "Option-arrow custom shortcut was rejected"
+        )
+        let optionUpEvent = makeKeyEvent(
+            keyCode: UInt16(kVK_UpArrow),
+            modifiers: [.option],
+            characters: ""
+        )
+        try require(
+            matcher.action(for: optionUpEvent, context: .browsing) == .togglePin
+                && matcher.action(for: optionUpEvent, context: .searching) == nil,
+            "custom management shortcut intercepted search field word navigation"
+        )
+    }
+
+    private static func testInvalidShortcutPersistenceFallsBackToDefaults() throws {
+        let suiteName = "cpsmartTests-invalidShortcuts-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let invalidJSON = """
+        {"version":1,"bindings":{"selectPrevious":[{"keyCode":0,"modifiersRawValue":0}]}}
+        """
+        settings.set(Data(invalidJSON.utf8), forKey: ShortcutStore.defaultsKey)
+
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        try require(
+            shortcuts.primaryBinding(for: .selectPrevious).keyCode == UInt16(kVK_LeftArrow),
+            "invalid persisted shortcut did not fall back to the default"
+        )
+    }
+
+    private static func makeKeyEvent(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags = [],
+        characters: String
+    ) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )!
     }
 
     private static func makePNGData() throws -> Data {

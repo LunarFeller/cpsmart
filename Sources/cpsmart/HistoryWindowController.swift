@@ -48,34 +48,16 @@ enum AppearanceMode: String, CaseIterable {
     }
 }
 
-/// 随外观切换的调色板。所有颜色都必须从这里取，不允许另写硬编码颜色。
-struct Palette {
-    let accent: NSColor
-    let textPrimary: NSColor
-    let textSecondary: NSColor
-    let textTertiary: NSColor
-    let cardFill: NSColor
-    let cardFillHover: NSColor
-    let cardFillSelected: NSColor
-    let cardBorder: NSColor
-    let panelBorder: NSColor
-    let panelTint: NSColor
-    let thumbPlaceholder: NSColor
-    let typeText: NSColor
-    let typeImage: NSColor
-    let typeFile: NSColor
-}
-
-// MARK: - Theme（尺寸与动效 token + 调色板工厂）
+// MARK: - Theme（尺寸与动效 token）
 
 private enum Theme {
     // 面板
     static let panelHeight: CGFloat = 248
-    static let panelRadius: CGFloat = 20
+    static let panelRadius = AppVisualTheme.panelRadius
 
     // 卡片
     static let cardSize = NSSize(width: 204, height: 150)
-    static let cardRadius: CGFloat = 12
+    static let cardRadius = AppVisualTheme.cardRadius
     static let thumbRadius: CGFloat = 8
 
     // 动效
@@ -83,44 +65,6 @@ private enum Theme {
     static let entranceDuration: TimeInterval = 0.18
     static let exitDuration: TimeInterval = 0.12
 
-    static func palette(isDark: Bool) -> Palette {
-        if isDark {
-            let accent = NSColor(srgbRed: 10 / 255, green: 132 / 255, blue: 255 / 255, alpha: 1)
-            return Palette(
-                accent: accent,
-                textPrimary: NSColor.white.withAlphaComponent(0.92),
-                textSecondary: NSColor.white.withAlphaComponent(0.55),
-                textTertiary: NSColor.white.withAlphaComponent(0.38),
-                cardFill: NSColor.white.withAlphaComponent(0.055),
-                cardFillHover: NSColor.white.withAlphaComponent(0.09),
-                cardFillSelected: accent.withAlphaComponent(0.16),
-                cardBorder: NSColor.white.withAlphaComponent(0.10),
-                panelBorder: NSColor.white.withAlphaComponent(0.16),
-                panelTint: NSColor(srgbRed: 0.055, green: 0.065, blue: 0.085, alpha: 0.78),
-                thumbPlaceholder: NSColor.white.withAlphaComponent(0.045),
-                typeText: NSColor(srgbRed: 0.35, green: 0.78, blue: 0.98, alpha: 1),
-                typeImage: NSColor(srgbRed: 0.72, green: 0.55, blue: 0.98, alpha: 1),
-                typeFile: NSColor(srgbRed: 0.98, green: 0.72, blue: 0.32, alpha: 1)
-            )
-        }
-        let accent = NSColor(srgbRed: 0, green: 122 / 255, blue: 1, alpha: 1)
-        return Palette(
-            accent: accent,
-            textPrimary: NSColor.black.withAlphaComponent(0.86),
-            textSecondary: NSColor.black.withAlphaComponent(0.56),
-            textTertiary: NSColor.black.withAlphaComponent(0.42),
-            cardFill: NSColor.black.withAlphaComponent(0.045),
-            cardFillHover: NSColor.black.withAlphaComponent(0.075),
-            cardFillSelected: accent.withAlphaComponent(0.14),
-            cardBorder: NSColor.black.withAlphaComponent(0.10),
-            panelBorder: NSColor.black.withAlphaComponent(0.12),
-            panelTint: NSColor.white.withAlphaComponent(0.72),
-            thumbPlaceholder: NSColor.black.withAlphaComponent(0.05),
-            typeText: NSColor(srgbRed: 0.03, green: 0.50, blue: 0.70, alpha: 1),
-            typeImage: NSColor(srgbRed: 0.55, green: 0.32, blue: 0.82, alpha: 1),
-            typeFile: NSColor(srgbRed: 0.80, green: 0.52, blue: 0.05, alpha: 1)
-        )
-    }
 }
 
 // MARK: - 图片元信息（轻量读取，不解码像素；缩略图本体见 ThumbnailProvider.swift）
@@ -146,35 +90,9 @@ private final class FloatingHistoryPanel: NSPanel {
 }
 
 private final class KeyboardCollectionView: NSCollectionView {
-    var onMoveLeft: (() -> Void)?
-    var onMoveRight: (() -> Void)?
-    var onConfirm: (() -> Void)?
-    var onDelete: (() -> Void)?
-    var onEscape: (() -> Void)?
     var onBackgroundClick: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 123:
-            onMoveLeft?()
-        case 124:
-            onMoveRight?()
-        case 36, 76:
-            onConfirm?()
-        case 51, 117:
-            if event.modifierFlags.contains(.command) {
-                onDelete?()
-            } else {
-                super.keyDown(with: event)
-            }
-        case 53:
-            onEscape?()
-        default:
-            super.keyDown(with: event)
-        }
-    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -263,7 +181,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     private var metaLeadingDirect: NSLayoutConstraint!
     private var metaLeadingAfterIcon: NSLayoutConstraint!
     private var representedEntryID: UUID?
-    private var palette = Theme.palette(isDark: true)
+    private var palette = AppVisualTheme.palette(isDark: true)
 
     private var isHovered = false {
         didSet { updateAppearance() }
@@ -603,6 +521,8 @@ final class HistoryWindowController: NSWindowController,
     private let flowLayout = NSCollectionViewFlowLayout()
     private let thumbnailProvider = ThumbnailProvider()
     private let adaptivePreviewController = AdaptivePreviewController()
+    private let shortcutStore: ShortcutStore
+    private let shortcutMatcher: ShortcutMatcher
     private let searchField = NSSearchField()
     private var filterControl: NSSegmentedControl!
     private let titleLabel = NSTextField(labelWithString: "cpsmart")
@@ -613,7 +533,7 @@ final class HistoryWindowController: NSWindowController,
     private var effectView: NSVisualEffectView!
     private var tintView: NSView!
 
-    private var palette = Theme.palette(isDark: true)
+    private var palette = AppVisualTheme.palette(isDark: true)
     private var allEntries: [ClipboardEntry] = []
     private var visibleEntries: [ClipboardEntry] = []
     private var query = ""
@@ -628,9 +548,12 @@ final class HistoryWindowController: NSWindowController,
     private var isPositioningQuickLookPanel = false
     private var activationObserver: NSObjectProtocol?
     private var systemThemeObserver: NSObjectProtocol?
+    private var shortcutObserver: NSObjectProtocol?
     private var isDismissing = false
 
-    init() {
+    init(shortcutStore: ShortcutStore) {
+        self.shortcutStore = shortcutStore
+        shortcutMatcher = ShortcutMatcher(store: shortcutStore)
         let panel = FloatingHistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: Theme.panelHeight),
             styleMask: [.borderless],
@@ -666,6 +589,13 @@ final class HistoryWindowController: NSWindowController,
         ) { [weak self] _ in
             self?.applyAppearanceMode()
         }
+        shortcutObserver = NotificationCenter.default.addObserver(
+            forName: ShortcutStore.didChangeNotification,
+            object: shortcutStore,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateHintLabel()
+        }
         buildInterface()
         applyAppearanceMode()
     }
@@ -683,12 +613,15 @@ final class HistoryWindowController: NSWindowController,
         if let systemThemeObserver {
             DistributedNotificationCenter.default().removeObserver(systemThemeObserver)
         }
+        if let shortcutObserver {
+            NotificationCenter.default.removeObserver(shortcutObserver)
+        }
     }
 
     /// 应用外观模式；传 nil 时读取当前设置。菜单切换或系统主题变化时调用。
     func applyAppearanceMode(_ mode: AppearanceMode? = nil) {
         let isDark = (mode ?? AppearanceMode.current).isDark
-        palette = Theme.palette(isDark: isDark)
+        palette = AppVisualTheme.palette(isDark: isDark)
 
         let appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         window?.appearance = appearance
@@ -864,13 +797,6 @@ final class HistoryWindowController: NSWindowController,
             HistoryCollectionItem.self,
             forItemWithIdentifier: Self.itemIdentifier
         )
-        collectionView.onMoveLeft = { [weak self] in self?.moveSelection(by: -1) }
-        collectionView.onMoveRight = { [weak self] in self?.moveSelection(by: 1) }
-        collectionView.onConfirm = { [weak self] in self?.confirmAndPaste() }
-        collectionView.onDelete = { [weak self] in self?.deleteSelection() }
-        collectionView.onEscape = { [weak self] in
-            self?.dismiss(restorePreviousApplication: true)
-        }
         collectionView.onBackgroundClick = { [weak self] in
             self?.focusCollectionView()
         }
@@ -1041,11 +967,15 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func updateHintLabel() {
+        let search = shortcutStore.displayString(for: .toggleSearchFocus)
+        let preview = shortcutStore.displayString(for: .toggleQuickLook)
+        let paste = shortcutStore.displayString(for: .pasteSelection)
+        let close = shortcutStore.displayString(for: .clearSearchOrClose)
         if isSearchFieldFocused {
-            let escapeHint = query.isEmpty ? "Esc 关闭" : "Esc 清除搜索"
-            hintLabel.stringValue = "输入筛选 · Tab 返回浏览 · 空格 预览 · ⏎ 粘贴 · \(escapeHint)"
+            let closeHint = query.isEmpty ? "\(close) 关闭" : "\(close) 清除搜索"
+            hintLabel.stringValue = "输入筛选 · \(search) 返回浏览 · \(preview) 预览 · \(paste) 粘贴 · \(closeHint)"
         } else {
-            hintLabel.stringValue = "单击选择并复制 · 双击粘贴 · 空格预览 · Tab 搜索 · ⌘P 置顶 · ⌘⌫ 删除 · Esc 关闭"
+            hintLabel.stringValue = "单击选择并复制 · \(preview) 预览 · \(search) 搜索 · \(paste) 粘贴 · \(close) 关闭"
         }
     }
 
@@ -1487,14 +1417,18 @@ final class HistoryWindowController: NSWindowController,
         }
 
         if isQuickLookVisible {
-            switch event.keyCode {
-            case 49, 53:
+            switch shortcutMatcher.action(for: event, context: .quickLook) {
+            case .toggleQuickLook, .clearSearchOrClose:
                 if !event.isARepeat {
                     closeQuickLookIfNeeded(restoreBrowsingFocus: true)
                 }
-            case 123, 124:
-                let offset = event.keyCode == 123 ? -1 : 1
-                moveSelection(by: offset)
+            case .selectPrevious:
+                moveSelection(by: -1)
+                if prepareQuickLookPreview() {
+                    QLPreviewPanel.shared()?.reloadData()
+                }
+            case .selectNext:
+                moveSelection(by: 1)
                 if prepareQuickLookPreview() {
                     if let panel = QLPreviewPanel.shared() {
                         panel.reloadData()
@@ -1507,69 +1441,67 @@ final class HistoryWindowController: NSWindowController,
             return true
         }
 
-        // ⌘1–⌘4 切换类型筛选
-        if event.modifierFlags.contains(.command), (18...21).contains(event.keyCode) {
-            filterControl.selectedSegment = Int(event.keyCode) - 18
-            filterChanged(filterControl)
-            return true
+        let context: ShortcutContext
+        if isComposingSearchText {
+            context = .composingSearchText
+        } else if isSearchFieldFocused {
+            context = .searching
+        } else {
+            context = .browsing
         }
 
-        // ⌘P 切换置顶
-        if event.modifierFlags.contains(.command), event.keyCode == 35 {
-            togglePinSelection()
-            return true
-        }
-
-        // 输入法存在组合文本时，候选选择、确认和取消都交还给系统文本输入。
-        if isComposingSearchText, !event.modifierFlags.contains(.command) {
+        guard let action = shortcutMatcher.action(for: event, context: context) else {
+            if context == .browsing, isPrintableTextInput(event) {
+                // 浏览态必须先使用配置的搜索快捷键，避免无意按键改变筛选结果。
+                return true
+            }
             return false
         }
 
-        switch event.keyCode {
-        case 123:
-            if isSearchFieldFocused { return false }
+        switch action {
+        case .selectPrevious:
             moveSelection(by: -1)
-        case 124:
-            if isSearchFieldFocused { return false }
+        case .selectNext:
             moveSelection(by: 1)
-        case 48:
+        case .toggleSearchFocus:
             if isSearchFieldFocused {
                 focusCollectionView()
             } else {
                 focusSearchField()
             }
-        case 36, 76:
+        case .pasteSelection:
             confirmAndPaste()
-        case 49:
+        case .toggleQuickLook:
             if !event.isARepeat {
                 togglePreview()
             }
-        case 51, 117:
-            // 删除统一走 ⌘⌫（同 Finder）：搜索时退格要留给文本编辑，
-            // 连按退格清空搜索词后若继续删记录容易误删
-            if event.modifierFlags.contains(.command) {
-                deleteSelection()
-            } else {
-                if !isSearchFieldFocused {
-                    focusSearchField()
-                }
-                return false
-            }
-        case 53:
-            // Esc 优先清除搜索，再按一次才关闭
+        case .togglePin:
+            togglePinSelection()
+        case .deleteSelection:
+            deleteSelection()
+        case .filterAll:
+            applyFilterShortcut(segment: 0)
+        case .filterText:
+            applyFilterShortcut(segment: 1)
+        case .filterImage:
+            applyFilterShortcut(segment: 2)
+        case .filterFiles:
+            applyFilterShortcut(segment: 3)
+        case .clearSearchOrClose:
             if !query.isEmpty {
                 clearSearch()
             } else {
                 dismiss(restorePreviousApplication: true)
             }
-        default:
-            if !isSearchFieldFocused, isPrintableTextInput(event) {
-                // 浏览态必须先按 Tab 才能搜索，避免无意按键改变筛选结果。
-                return true
-            }
+        case .toggleHistory:
             return false
         }
         return true
+    }
+
+    private func applyFilterShortcut(segment: Int) {
+        filterControl.selectedSegment = segment
+        filterChanged(filterControl)
     }
 
     private func isPrintableTextInput(_ event: NSEvent) -> Bool {
