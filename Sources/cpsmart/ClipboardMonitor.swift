@@ -7,7 +7,7 @@ final class ClipboardMonitor {
         static let maximumFileCount = 100
     }
 
-    var onCapture: ((ClipboardPayload) -> Void)?
+    var onCapture: ((ClipboardPayload, String?, String?) -> Void)?
     var isPaused = false
 
     private let pasteboard: NSPasteboard
@@ -61,12 +61,27 @@ final class ClipboardMonitor {
         lastChangeCount = currentChangeCount
         guard !isPaused, !containsIgnoredType else { return }
         guard let payload = readPayload() else { return }
-        onCapture?(payload)
+        let sourceApplication = currentSourceApplication()
+        onCapture?(payload, sourceApplication?.name, sourceApplication?.bundleID)
     }
 
     private var containsIgnoredType: Bool {
         let currentTypes = Set(pasteboard.types ?? [])
         return !currentTypes.isDisjoint(with: ignoredTypes)
+    }
+
+    private func currentSourceApplication() -> (name: String?, bundleID: String?)? {
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              application.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return nil
+        }
+
+        if let ownBundleID = Bundle.main.bundleIdentifier,
+           application.bundleIdentifier == ownBundleID {
+            return nil
+        }
+
+        return (application.localizedName, application.bundleIdentifier)
     }
 
     private func readPayload() -> ClipboardPayload? {

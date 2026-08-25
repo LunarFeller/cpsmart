@@ -26,9 +26,19 @@ final class HistoryStore {
     }
 
     @discardableResult
-    func add(_ payload: ClipboardPayload, at date: Date = Date()) -> ClipboardEntry {
+    func add(
+        _ payload: ClipboardPayload,
+        sourceAppName: String? = nil,
+        sourceAppBundleID: String? = nil,
+        at date: Date = Date()
+    ) -> ClipboardEntry {
         entries.removeAll { $0.payload == payload }
-        let entry = ClipboardEntry(payload: payload, createdAt: date)
+        let entry = ClipboardEntry(
+            payload: payload,
+            createdAt: date,
+            sourceAppName: sourceAppName,
+            sourceAppBundleID: sourceAppBundleID
+        )
         entries.insert(entry, at: 0)
         trimToLimits()
         save()
@@ -38,7 +48,13 @@ final class HistoryStore {
     func promote(_ entry: ClipboardEntry) {
         entries.removeAll { $0.id == entry.id || $0.payload == entry.payload }
         entries.insert(
-            ClipboardEntry(id: entry.id, payload: entry.payload, createdAt: Date()),
+            ClipboardEntry(
+                id: entry.id,
+                payload: entry.payload,
+                createdAt: Date(),
+                sourceAppName: entry.sourceAppName,
+                sourceAppBundleID: entry.sourceAppBundleID
+            ),
             at: 0
         )
         save()
