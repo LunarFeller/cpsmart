@@ -71,12 +71,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         monitor.isPaused = UserDefaults.standard.bool(forKey: "capturePaused")
         monitor.onCapture = { [weak self] payload, sourceAppName, sourceAppBundleID in
             guard let self else { return }
-            self.store.add(
+            let capturedEntry = self.store.add(
                 payload,
                 sourceAppName: sourceAppName,
                 sourceAppBundleID: sourceAppBundleID
             )
-            self.historyWindow.refresh(entries: self.store.entries)
+            self.historyWindow.refresh(
+                entries: self.store.entries,
+                selectingEntryID: capturedEntry.id
+            )
         }
         monitor.start()
     }
