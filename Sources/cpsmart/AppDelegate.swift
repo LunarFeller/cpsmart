@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let historyWindow = HistoryWindowController()
+    private let aboutWindow = AboutWindowController()
     private var hotKey: GlobalHotKey?
     private var statusItem: NSStatusItem!
     private var pauseMenuItem: NSMenuItem!
@@ -41,6 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.showHistory()
             }
         }
+        if CommandLine.arguments.contains("--show-about") {
+            DispatchQueue.main.async { [weak self] in
+                self?.aboutWindow.show()
+            }
+        }
 
         #if DEBUG
         // 开发用：`--demo-data` 用内置演示数据打开浮窗，不读写真实历史，便于截图审查 UI。
@@ -69,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func configureApplicationIcon() {
-        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+        guard let iconURL = Bundle.main.url(forResource: "CPSmartAppIcon", withExtension: "icns"),
               let icon = NSImage(contentsOf: iconURL) else { return }
         NSApp.applicationIconImage = icon
     }
@@ -265,30 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showAbout() {
-        let version = Bundle.main.object(
-            forInfoDictionaryKey: "CFBundleShortVersionString"
-        ) as? String ?? "开发版"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        let displayVersion = build.map { "\(version) (\($0))" } ?? version
-        let usage = """
-        轻量、私密的本地剪贴板历史工具。历史只保存在这台 Mac 上。
-
-        使用说明
-        • ⇧⌘V：打开或关闭剪贴板历史
-        • 默认进入浏览；Tab：在卡片列表与搜索框之间切换
-        • ← / →：选择记录；空格：Quick Look 预览
-        • 鼠标单击：选择并复制；双击：粘贴
-        • Return：粘贴；⌘P：置顶；⌘⌫：删除
-        • ⌘1–4：筛选全部、文本、图片或文件
-        • Esc：先清除搜索，再关闭窗口
-        • 清空历史会保留置顶；按住 ⌥ 打开菜单可清空全部
-        """
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .applicationName: "cpsmart",
-            .applicationVersion: displayVersion,
-            .credits: NSAttributedString(string: usage)
-        ])
-        NSApp.activate(ignoringOtherApps: true)
+        aboutWindow.show()
     }
 
     @objc private func quit() {

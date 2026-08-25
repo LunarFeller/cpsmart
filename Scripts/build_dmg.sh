@@ -9,7 +9,7 @@ APP_DIR="$BUILD_DIR/cpsmart.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
+ICONSET_DIR="$BUILD_DIR/CPSmartAppIcon.iconset"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
 SDK_PATH="${CPSMART_SDK_PATH:-}"
 VERSION="${CPSMART_VERSION:-$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")}"
@@ -117,11 +117,12 @@ cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
 
 rm -rf "$ICONSET_DIR"
+rm -f "$RESOURCES_DIR/AppIcon.icns" "$RESOURCES_DIR/CPSmartAppIcon.icns"
 CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/module-cache-icon" \
     swift -sdk "$SDK_PATH" "$PROJECT_DIR/Scripts/generate_icon.swift" "$ICONSET_DIR"
 CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/module-cache-icon" \
     swift -sdk "$SDK_PATH" "$PROJECT_DIR/Scripts/create_icns.swift" \
-    "$ICONSET_DIR" "$RESOURCES_DIR/AppIcon.icns"
+    "$ICONSET_DIR" "$RESOURCES_DIR/CPSmartAppIcon.icns"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     codesign --force --deep --sign - "$APP_DIR"

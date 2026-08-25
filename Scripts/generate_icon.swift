@@ -10,7 +10,7 @@ let scriptDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent(
 let projectDirectory = scriptDirectory.deletingLastPathComponent()
 let sourceURL = projectDirectory
     .appendingPathComponent("Resources", isDirectory: true)
-    .appendingPathComponent("AppIconSource.png")
+    .appendingPathComponent("CPSmartAppIconSource.png")
 
 guard let sourceImage = NSImage(contentsOf: sourceURL) else {
     fputs("Unable to load app icon source at \(sourceURL.path)\n", stderr)
