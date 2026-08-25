@@ -2,8 +2,11 @@ import AppKit
 
 final class AboutWindowController: NSWindowController, NSWindowDelegate {
     private let preferredSize = NSSize(width: 680, height: 760)
+    private let shortcutStore: ShortcutStore
+    private var shortcutObserver: NSObjectProtocol?
 
-    init() {
+    init(shortcutStore: ShortcutStore) {
+        self.shortcutStore = shortcutStore
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: preferredSize),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
@@ -22,11 +25,25 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         window.collectionBehavior = [.moveToActiveSpace]
         window.contentView = makeContentView()
         window.delegate = self
+        shortcutObserver = NotificationCenter.default.addObserver(
+            forName: ShortcutStore.didChangeNotification,
+            object: shortcutStore,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, self.window?.isVisible == true else { return }
+            self.window?.contentView = self.makeContentView()
+        }
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let shortcutObserver {
+            NotificationCenter.default.removeObserver(shortcutObserver)
+        }
     }
 
     func show() {
@@ -179,8 +196,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             symbol: "sparkles",
             rows: [
                 ("", "在任何应用中复制文本、图片或文件。"),
-                ("", "按 ⇧⌘V 打开历史浮窗，直接输入即可搜索。"),
-                ("", "选中后按回车，或双击卡片，粘贴回原来的应用。")
+                ("", "按 \(shortcutStore.displayString(for: .toggleHistory)) 打开历史浮窗，再按 \(shortcutStore.displayString(for: .toggleSearchFocus)) 进入搜索。"),
+                ("", "选中后按 \(shortcutStore.displayString(for: .pasteSelection))，或双击卡片，粘贴回原来的应用。")
             ].map { (step: $0.0, detail: $0.1) }
         ) { [weak self] _, detail in
             let line = self?.label(detail, size: 12.5) ?? NSTextField()
@@ -192,16 +209,19 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
     private func makeKeyboardCard() -> NSView {
         let rows: [(key: String, detail: String)] = [
-            ("⇧⌘V", "打开或关闭剪贴板历史"),
-            ("←  →", "在卡片之间移动选择"),
-            ("Space", "Quick Look 预览所选内容"),
-            ("Tab", "在卡片与搜索框之间切换"),
-            ("回车", "粘贴所选内容到原应用"),
-            ("⌘P", "置顶或取消置顶"),
-            ("⌘⌫", "删除所选记录"),
-            ("⌘1–4", "筛选全部、文本、图片、文件"),
-            ("Esc", "先清除搜索，再关闭窗口"),
-            ("A–Z", "直接输入即可过滤搜索")
+            (shortcutStore.displayString(for: .toggleHistory), "打开或关闭剪贴板历史"),
+            (shortcutStore.displayString(for: .selectPrevious), "选择上一张卡片"),
+            (shortcutStore.displayString(for: .selectNext), "选择下一张卡片"),
+            (shortcutStore.displayString(for: .toggleQuickLook), "Quick Look 预览所选内容"),
+            (shortcutStore.displayString(for: .toggleSearchFocus), "在卡片与搜索框之间切换"),
+            (shortcutStore.displayString(for: .pasteSelection), "粘贴所选内容到原应用"),
+            (shortcutStore.displayString(for: .togglePin), "置顶或取消置顶"),
+            (shortcutStore.displayString(for: .deleteSelection), "删除所选记录"),
+            (shortcutStore.displayString(for: .filterAll), "筛选全部记录"),
+            (shortcutStore.displayString(for: .filterText), "筛选文本"),
+            (shortcutStore.displayString(for: .filterImage), "筛选图片"),
+            (shortcutStore.displayString(for: .filterFiles), "筛选文件"),
+            (shortcutStore.displayString(for: .clearSearchOrClose), "先清除搜索，再关闭窗口")
         ]
         return makeCard(
             title: "键盘快捷键",
@@ -252,7 +272,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         let keyLabel = label(key, size: 12.5, weight: .semibold)
         keyLabel.translatesAutoresizingMaskIntoConstraints = false
         keyLabel.alignment = .right
-        keyLabel.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        keyLabel.widthAnchor.constraint(equalToConstant: 82).isActive = true
 
         let detailLabel = label(detail, size: 12.5, color: .secondaryLabelColor)
         detailLabel.maximumNumberOfLines = 0
