@@ -375,22 +375,6 @@ final class ShortcutStore: NSObject {
         return nil
     }
 
-    @discardableResult
-    func applyNavigationPreset(
-        previous: ShortcutGesture,
-        next: ShortcutGesture
-    ) -> ShortcutValidationIssue? {
-        let replacements: [ShortcutActionID: [ShortcutGesture]] = [
-            .selectPrevious: [previous],
-            .selectNext: [next]
-        ]
-        if let issue = validateBatch(replacements) { return issue }
-        setOverride([previous], for: .selectPrevious)
-        setOverride([next], for: .selectNext)
-        persistAndNotify()
-        return nil
-    }
-
     func resetToDefaults() {
         overrides.removeAll()
         userDefaults.removeObject(forKey: Self.defaultsKey)
@@ -548,6 +532,13 @@ struct ShortcutMatcher {
 
     func action(for event: NSEvent, context: ShortcutContext) -> ShortcutActionID? {
         let gesture = ShortcutGesture.from(event: event)
+        // 空格在搜索框里永远是输入字符：即使用户把 Space 绑定给预览或粘贴，
+        // 无 ⌘ 修饰的 Space 在搜索态也必须穿透，否则无法输入多词搜索。
+        if context == .searching,
+           gesture.keyCode == UInt16(kVK_Space),
+           !gesture.modifiers.contains(.command) {
+            return nil
+        }
         let actions: [ShortcutActionID]
         switch context {
         case .browsing:

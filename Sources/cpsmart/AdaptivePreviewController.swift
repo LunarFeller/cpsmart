@@ -11,6 +11,14 @@ final class AdaptivePreviewController: NSObject {
 
     var isVisible: Bool { popover.isShown }
 
+    /// 文本和剪贴板图片支持轻量预览；普通文件始终走系统 Quick Look。
+    static func supports(entry: ClipboardEntry) -> Bool {
+        switch entry.payload {
+        case .text, .image: return true
+        case .files: return false
+        }
+    }
+
     @discardableResult
     func show(
         entry: ClipboardEntry,

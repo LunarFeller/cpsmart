@@ -35,7 +35,7 @@ struct CoreTests {
         try testAdaptivePreviewSizing()
         try testShortcutDefaultsAndValidation()
         try testShortcutPersistenceAndReset()
-        try testShortcutResetSwapAndNavigationPreset()
+        try testShortcutResetAndSwap()
         try testShortcutMatcherContexts()
         try testInvalidShortcutPersistenceFallsBackToDefaults()
         try testPinboardLifecycle(in: temporaryDirectory)
@@ -798,7 +798,7 @@ struct CoreTests {
         )
     }
 
-    private static func testShortcutResetSwapAndNavigationPreset() throws {
+    private static func testShortcutResetAndSwap() throws {
         let suiteName = "cpsmartTests-shortcutEditing-\(UUID().uuidString)"
         let settings = UserDefaults(suiteName: suiteName)!
         defer { settings.removePersistentDomain(forName: suiteName) }
@@ -806,8 +806,6 @@ struct CoreTests {
 
         let left = ShortcutGesture(keyCode: UInt16(kVK_LeftArrow))
         let right = ShortcutGesture(keyCode: UInt16(kVK_RightArrow))
-        let up = ShortcutGesture(keyCode: UInt16(kVK_UpArrow))
-        let down = ShortcutGesture(keyCode: UInt16(kVK_DownArrow))
 
         try require(
             shortcuts.swap(
@@ -824,11 +822,11 @@ struct CoreTests {
             shortcuts.validateReset(for: .selectPrevious) == .conflictsWith(.selectNext),
             "single-action reset did not detect a conflict with the current bindings"
         )
+        // 交换状态下两项互为对方默认值，任何单项恢复都会冲突；
+        // 先把其中一项改到空闲按键，才能单项恢复另一项。
         try require(
-            shortcuts.applyNavigationPreset(previous: up, next: down) == nil
-                && shortcuts.primaryBinding(for: .selectPrevious) == up
-                && shortcuts.primaryBinding(for: .selectNext) == down,
-            "vertical navigation preset was not applied atomically"
+            shortcuts.set(ShortcutGesture(keyCode: UInt16(kVK_UpArrow)), for: .selectNext) == nil,
+            "moving selectNext to a free key was rejected"
         )
         try require(
             shortcuts.resetToDefault(.selectPrevious) == nil
@@ -905,6 +903,20 @@ struct CoreTests {
         try require(
             matcher.action(for: space, context: .searching) == nil,
             "Space was intercepted while typing in the search field"
+        )
+        // 即使用户把 Space 重绑定给粘贴，搜索框里的空格仍然必须是输入字符。
+        try require(
+            shortcuts.swap(
+                .pasteSelection,
+                with: .toggleQuickLook,
+                requestedGesture: ShortcutGesture(keyCode: UInt16(kVK_Space))
+            ) == nil,
+            "Space could not be swapped onto paste"
+        )
+        try require(
+            matcher.action(for: space, context: .browsing) == .pasteSelection
+                && matcher.action(for: space, context: .searching) == nil,
+            "rebound Space was intercepted while typing in the search field"
         )
 
         let optionCommandP = makeKeyEvent(

@@ -249,9 +249,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 requestedGesture: gesture
             )
         }
-        shortcutSettingsWindow.onAttemptNavigationPreset = { [weak self] vertical in
-            self?.attemptNavigationPreset(vertical: vertical)
-        }
         shortcutSettingsWindow.onRecordingStateChanged = { [weak self] recording in
             self?.setShortcutRecording(recording)
         }
@@ -505,19 +502,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if let candidateHotKey { hotKey = candidateHotKey }
         openHistoryMenuItem?.title = openHistoryMenuTitle
-        return nil
-    }
-
-    private func attemptNavigationPreset(vertical: Bool) -> String? {
-        let previous = ShortcutGesture(
-            keyCode: UInt16(vertical ? kVK_UpArrow : kVK_LeftArrow)
-        )
-        let next = ShortcutGesture(
-            keyCode: UInt16(vertical ? kVK_DownArrow : kVK_RightArrow)
-        )
-        if let issue = shortcutStore.applyNavigationPreset(previous: previous, next: next) {
-            return "无法应用方向键布局：\(issue.message)"
-        }
         return nil
     }
 

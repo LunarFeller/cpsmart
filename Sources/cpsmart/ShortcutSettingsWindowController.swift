@@ -326,22 +326,15 @@ private final class ShortcutRowView: NSView {
             modifiedLabel.heightAnchor.constraint(equalToConstant: 20)
         ])
 
-        resetButton.image = NSImage(
-            systemSymbolName: "arrow.counterclockwise",
-            accessibilityDescription: "恢复此项默认快捷键"
-        )
-        resetButton.bezelStyle = .inline
-        resetButton.isBordered = false
-        resetButton.imageScaling = .scaleProportionallyDown
+        resetButton.title = "恢复"
+        resetButton.bezelStyle = .rounded
+        resetButton.controlSize = .small
+        resetButton.font = .systemFont(ofSize: 11, weight: .medium)
         resetButton.target = self
         resetButton.action = #selector(resetAction)
         resetButton.toolTip = "仅恢复这一项"
         resetButton.isHidden = true
         resetButton.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            resetButton.widthAnchor.constraint(equalToConstant: 26),
-            resetButton.heightAnchor.constraint(equalToConstant: 26)
-        ])
 
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -409,7 +402,6 @@ private final class ShortcutRowView: NSView {
         modifiedLabel.textColor = palette.accent
         modifiedLabel.layer?.backgroundColor = palette.cardFillSelected.cgColor
         modifiedLabel.layer?.cornerRadius = 6
-        resetButton.contentTintColor = palette.textSecondary
         recorder.applyPalette(palette)
         if feedbackKind == .success { feedbackLabel.textColor = .systemGreen }
         if feedbackKind == .error { feedbackLabel.textColor = .systemRed }
@@ -536,97 +528,6 @@ private final class ShortcutCardView: NSView {
     }
 }
 
-private final class NavigationPresetView: NSView {
-    var onChoosePreset: ((Bool) -> Void)?
-
-    private let titleLabel = NSTextField(labelWithString: "方向键布局")
-    private let detailLabel = NSTextField(labelWithString: "一次切换上一项与下一项")
-    private let segmented = NSSegmentedControl(
-        labels: ["←  →   左右", "↑  ↓   上下"],
-        trackingMode: .selectOne,
-        target: nil,
-        action: nil
-    )
-    private let feedbackLabel = NSTextField(wrappingLabelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        detailLabel.font = .systemFont(ofSize: 11)
-        segmented.target = self
-        segmented.action = #selector(choosePreset)
-        segmented.controlSize = .small
-        segmented.segmentDistribution = .fillEqually
-        segmented.translatesAutoresizingMaskIntoConstraints = false
-
-        let copy = NSStackView(views: [titleLabel, detailLabel])
-        copy.orientation = .vertical
-        copy.alignment = .leading
-        copy.spacing = 2
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = NSStackView(views: [copy, spacer, segmented])
-        row.translatesAutoresizingMaskIntoConstraints = false
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 12
-        addSubview(row)
-
-        feedbackLabel.translatesAutoresizingMaskIntoConstraints = false
-        feedbackLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
-        feedbackLabel.textColor = .systemRed
-        feedbackLabel.isHidden = true
-        addSubview(feedbackLabel)
-
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 62),
-            segmented.widthAnchor.constraint(equalToConstant: 220),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-            row.topAnchor.constraint(equalTo: topAnchor, constant: 11),
-            feedbackLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor),
-            feedbackLabel.trailingAnchor.constraint(equalTo: row.trailingAnchor),
-            feedbackLabel.topAnchor.constraint(equalTo: row.bottomAnchor, constant: 6),
-            feedbackLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func applyPalette(_ palette: Palette) {
-        titleLabel.textColor = palette.textPrimary
-        detailLabel.textColor = palette.textSecondary
-    }
-
-    func update(previous: ShortcutGesture, next: ShortcutGesture) {
-        let horizontal = previous.keyCode == UInt16(kVK_LeftArrow)
-            && previous.modifiers.isEmpty
-            && next.keyCode == UInt16(kVK_RightArrow)
-            && next.modifiers.isEmpty
-        let vertical = previous.keyCode == UInt16(kVK_UpArrow)
-            && previous.modifiers.isEmpty
-            && next.keyCode == UInt16(kVK_DownArrow)
-            && next.modifiers.isEmpty
-        segmented.selectedSegment = horizontal ? 0 : (vertical ? 1 : -1)
-    }
-
-    func showError(_ message: String) {
-        feedbackLabel.stringValue = message
-        feedbackLabel.isHidden = false
-    }
-
-    func clearError() {
-        feedbackLabel.isHidden = true
-    }
-
-    @objc private func choosePreset() {
-        onChoosePreset?(segmented.selectedSegment == 1)
-    }
-}
-
 private final class SettingsBackdropView: NSVisualEffectView {
     private var palette = AppVisualTheme.palette(isDark: true)
 
@@ -656,7 +557,6 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
     var onAttemptReset: (() -> String?)?
     var onAttemptResetAction: ((ShortcutActionID) -> String?)?
     var onAttemptSwap: ((ShortcutActionID, ShortcutActionID, ShortcutGesture) -> String?)?
-    var onAttemptNavigationPreset: ((Bool) -> String?)?
     var onRecordingStateChanged: ((Bool) -> String?)?
 
     private let shortcutStore: ShortcutStore
@@ -668,7 +568,6 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
     private let resetAllButton = NSButton(title: "恢复全部默认", target: nil, action: nil)
     private let advancedButton = NSButton()
     private var advancedCard: ShortcutCardView!
-    private let navigationPreset = NavigationPresetView()
     private var palette = AppVisualTheme.palette(isDark: true)
     private var shortcutObserver: NSObjectProtocol?
     private var recordingMonitor: Any?
@@ -767,17 +666,13 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         )
 
         let navigationCard = makeCard(items: [
-            navigationPreset,
             makeRow(for: .selectPrevious),
             makeRow(for: .selectNext),
             makeRow(for: .toggleSearchFocus)
         ])
-        navigationPreset.onChoosePreset = { [weak self] vertical in
-            self?.applyNavigationPreset(vertical: vertical)
-        }
         addSection(
             title: "浏览与定位",
-            subtitle: "选择一套顺手的方向，再微调每一个动作。",
+            subtitle: "在卡片之间移动选择，或在卡片和搜索框之间切换。",
             card: navigationCard,
             to: contentStack
         )
@@ -1034,13 +929,6 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         rows[conflictingAction]?.clearFeedback()
     }
 
-    private func applyNavigationPreset(vertical: Bool) {
-        navigationPreset.clearError()
-        if let error = onAttemptNavigationPreset?(vertical) {
-            navigationPreset.showError(error)
-        }
-    }
-
     @objc private func toggleAdvanced() {
         setAdvancedExpanded(advancedCard.isHidden)
     }
@@ -1090,10 +978,6 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         let count = shortcutStore.customizationCount
         footerCountLabel.stringValue = count == 0 ? "正在使用默认设置" : "已修改 \(count) 项快捷键"
         resetAllButton.isEnabled = count > 0
-        navigationPreset.update(
-            previous: shortcutStore.primaryBinding(for: .selectPrevious),
-            next: shortcutStore.primaryBinding(for: .selectNext)
-        )
         let advancedActions: Set<ShortcutActionID> = [
             .togglePin, .deleteSelection, .filterAll, .filterText, .filterImage, .filterFiles
         ]
@@ -1140,7 +1024,6 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         backdrop.applyPalette(palette)
         cards.forEach { $0.applyPalette(palette) }
         rows.values.forEach { $0.applyPalette(palette) }
-        navigationPreset.applyPalette(palette)
         footerCountLabel.textColor = palette.textSecondary
         resetAllButton.contentTintColor = palette.textSecondary
         advancedButton.contentTintColor = palette.textSecondary
