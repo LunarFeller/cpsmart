@@ -31,6 +31,10 @@ struct CoreTests {
         try testPinnedFieldLegacyCompatibility(in: temporaryDirectory)
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
+        try testPinboardLifecycle(in: temporaryDirectory)
+        try testPinboardEntryPersistence(in: temporaryDirectory)
+        try testPinboardReordering(in: temporaryDirectory)
+        try testPinboardNameValidation(in: temporaryDirectory)
         print("All cpsmart core tests passed.")
     }
 
@@ -49,6 +53,143 @@ struct CoreTests {
         try require(
             store.entries.first?.createdAt == Date(timeIntervalSince1970: 3),
             "promoted entry timestamp was not refreshed"
+        )
+    }
+
+    private static func testPinboardLifecycle(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-lifecycle.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: " 常用命令 ", color: .red),
+            "valid pinboard was not created"
+        )
+        try require(board.name == "常用命令", "pinboard name was not trimmed")
+
+        try require(store.rename(id: board.id, to: "开发命令"), "pinboard was not renamed")
+        store.setColor(id: board.id, color: .blue)
+
+        let reloaded = PinboardStore(fileURL: URL)
+        try require(
+            reloaded.boards.first?.name == "开发命令"
+                && reloaded.boards.first?.color == .blue,
+            "pinboard metadata did not persist"
+        )
+
+        reloaded.removeBoard(id: board.id)
+        try require(
+            PinboardStore(fileURL: URL).boards.isEmpty,
+            "deleted pinboard was restored after reload"
+        )
+    }
+
+    private static func testPinboardEntryPersistence(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-entries.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: "回复", color: .green),
+            "pinboard was not created"
+        )
+        let historyEntry = ClipboardEntry(
+            payload: .text("常用回复"),
+            createdAt: Date(timeIntervalSince1970: 1),
+            sourceAppName: "备忘录",
+            sourceAppBundleID: "com.apple.Notes",
+            isPinned: true
+        )
+        let firstFavorite = try requireValue(
+            store.add(historyEntry, to: board.id),
+            "history entry was not added to pinboard"
+        )
+        try require(firstFavorite.id != historyEntry.id, "pinboard did not create an independent snapshot")
+        try require(firstFavorite.isPinned != true, "history pin state leaked into pinboard")
+
+        let duplicateFavorite = store.add(historyEntry, to: board.id)
+        try require(
+            store.boards.first?.entries.count == 1,
+            "adding the same payload created duplicate favorites"
+        )
+        try require(
+            duplicateFavorite?.id == firstFavorite.id,
+            "adding an existing favorite replaced or reordered its snapshot"
+        )
+
+        let reloaded = PinboardStore(fileURL: URL)
+        let reloadedEntry = try requireValue(
+            reloaded.boards.first?.entries.first,
+            "pinboard entry did not persist"
+        )
+        try require(
+            reloadedEntry.payload == historyEntry.payload
+                && reloadedEntry.sourceAppBundleID == historyEntry.sourceAppBundleID,
+            "pinboard snapshot lost payload or source metadata"
+        )
+
+        reloaded.removeEntry(id: reloadedEntry.id, from: board.id)
+        try require(
+            PinboardStore(fileURL: URL).boards.first?.entries.isEmpty == true,
+            "removed favorite was restored after reload"
+        )
+    }
+
+    private static func testPinboardNameValidation(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-name-validation.json")
+        let store = PinboardStore(fileURL: URL)
+        try require(
+            store.create(name: " \n ", color: .gray) == nil,
+            "blank pinboard name was accepted"
+        )
+        let longName = String(repeating: "名", count: 40)
+        let board = try requireValue(
+            store.create(name: longName, color: .purple),
+            "long pinboard name was rejected instead of normalized"
+        )
+        try require(board.name.count == 30, "long pinboard name was not capped at 30 characters")
+        try require(
+            !store.rename(id: board.id, to: "   "),
+            "blank pinboard rename was accepted"
+        )
+    }
+
+    private static func testPinboardReordering(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-reordering.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: "有序命令", color: .orange),
+            "pinboard was not created"
+        )
+        store.add(ClipboardEntry(payload: .text("one")), to: board.id)
+        store.add(ClipboardEntry(payload: .text("two")), to: board.id)
+        let three = try requireValue(
+            store.add(ClipboardEntry(payload: .text("three")), to: board.id),
+            "third pinboard entry was not added"
+        )
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("three"), .text("two"), .text("one")
+            ],
+            "pinboard seed order was unexpected"
+        )
+
+        store.moveEntry(id: three.id, toInsertionIndex: 3, in: board.id)
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("two"), .text("one"), .text("three")
+            ],
+            "moving a favorite to the end used the wrong insertion index"
+        )
+        try require(
+            PinboardStore(fileURL: URL).boards.first?.entries.map(\.payload) == [
+                .text("two"), .text("one"), .text("three")
+            ],
+            "reordered favorites did not persist"
+        )
+
+        store.moveEntry(id: three.id, toInsertionIndex: 0, in: board.id)
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("three"), .text("two"), .text("one")
+            ],
+            "moving a favorite to the beginning failed"
         )
     }
 
@@ -509,6 +650,17 @@ struct CoreTests {
                 userInfo: [NSLocalizedDescriptionKey: message]
             )
         }
+    }
+
+    private static func requireValue<T>(_ value: T?, _ message: String) throws -> T {
+        guard let value else {
+            throw NSError(
+                domain: "cpsmartCoreTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        return value
     }
 
     private struct LegacyClipboardEntry: Codable {
