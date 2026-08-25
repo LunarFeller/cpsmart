@@ -247,6 +247,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     private let sourceIconView = NSImageView()
     private let metaTypeLabel = NSTextField(labelWithString: "")
     private let metaRightLabel = NSTextField(labelWithString: "")
+    private let pinImageView = NSImageView()
 
     private var textConstraints: [NSLayoutConstraint] = []
     private var imageConstraints: [NSLayoutConstraint] = []
@@ -311,6 +312,14 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         sourceIconView.imageScaling = .scaleProportionallyUpOrDown
         sourceIconView.isHidden = true
 
+        pinImageView.translatesAutoresizingMaskIntoConstraints = false
+        pinImageView.image = NSImage(
+            systemSymbolName: "pin.fill",
+            accessibilityDescription: "已置顶"
+        )
+        pinImageView.imageScaling = .scaleProportionallyUpOrDown
+        pinImageView.isHidden = true
+
         dimPill.addSubview(dimLabel)
         thumbView.addSubview(dimPill)
         cardView.addSubview(thumbView)
@@ -319,6 +328,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         cardView.addSubview(sourceIconView)
         cardView.addSubview(metaTypeLabel)
         cardView.addSubview(metaRightLabel)
+        cardView.addSubview(pinImageView)
 
         metaLeadingDirect = metaTypeLabel.leadingAnchor.constraint(
             equalTo: cardView.leadingAnchor, constant: 12
@@ -350,7 +360,13 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
             dimLabel.bottomAnchor.constraint(equalTo: dimPill.bottomAnchor, constant: -2),
 
             dimPill.trailingAnchor.constraint(equalTo: thumbView.trailingAnchor, constant: -6),
-            dimPill.bottomAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: -6)
+            dimPill.bottomAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: -6),
+
+            // 置顶标记固定在卡片右上角
+            pinImageView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 8),
+            pinImageView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -9),
+            pinImageView.widthAnchor.constraint(equalToConstant: 10),
+            pinImageView.heightAnchor.constraint(equalToConstant: 10)
         ])
 
         // 文本卡：多行预览占据内容区
@@ -410,6 +426,8 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         metaRightLabel.textColor = palette.textTertiary
 
         metaRightLabel.stringValue = Self.relativeDate.string(for: entry.createdAt) ?? "刚刚"
+        pinImageView.isHidden = entry.isPinned != true
+        pinImageView.contentTintColor = palette.accent
         configureSourceApp(entry)
 
         switch entry.payload {
@@ -570,6 +588,7 @@ final class HistoryWindowController: NSWindowController,
     var onChoose: ((ClipboardEntry) -> Void)?
     var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
     var onDelete: ((ClipboardEntry) -> Void)?
+    var onTogglePin: ((ClipboardEntry) -> Void)?
 
     private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
     private let collectionView = KeyboardCollectionView()
@@ -998,10 +1017,10 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func updateHintLabel() {
-        if isSearchFieldFocused, query.contains(where: { !$0.isWhitespace }) {
+        if isSearchFieldFocused {
             hintLabel.stringValue = "输入筛选 · Tab 返回浏览 · 空格 预览 · ⏎ 粘贴 · Esc 清除搜索"
         } else {
-            hintLabel.stringValue = "← → 选择 · 空格 预览 · ⏎ 粘贴 · Tab 搜索 · ⌘⌫ 删除 · Esc 关闭"
+            hintLabel.stringValue = "← → 选择 · 空格 预览 · ⏎ 粘贴 · Tab 搜索 · ⌘P 置顶 · ⌘⌫ 删除 · Esc 关闭"
         }
     }
 
@@ -1034,7 +1053,6 @@ final class HistoryWindowController: NSWindowController,
         window?.makeFirstResponder(searchField)
         updateHintLabel()
     }
-
     // MARK: QuickLook 预览
 
     private var isQuickLookVisible: Bool {
@@ -1132,7 +1150,6 @@ final class HistoryWindowController: NSWindowController,
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         quickLookPreviewURL as? QLPreviewItem
     }
-
     func previewPanel(
         _ panel: QLPreviewPanel!,
         sourceFrameOnScreenFor item: QLPreviewItem!
@@ -1152,7 +1169,6 @@ final class HistoryWindowController: NSWindowController,
             self.focusCollectionView()
         }
     }
-
     private func selectAndChoose(index: Int, notifyWhenUnchanged: Bool) {
         guard visibleEntries.indices.contains(index) else { return }
         let selectionChanged = selectedIndex != index
@@ -1195,6 +1211,11 @@ final class HistoryWindowController: NSWindowController,
     private func deleteSelection() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
         onDelete?(visibleEntries[selectedIndex])
+    }
+
+    private func togglePinSelection() {
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
+        onTogglePin?(visibleEntries[selectedIndex])
     }
 
     private func clearSearch() {
@@ -1324,6 +1345,12 @@ final class HistoryWindowController: NSWindowController,
         if event.modifierFlags.contains(.command), (18...21).contains(event.keyCode) {
             filterControl.selectedSegment = Int(event.keyCode) - 18
             filterChanged(filterControl)
+            return true
+        }
+
+        // ⌘P 切换置顶
+        if event.modifierFlags.contains(.command), event.keyCode == 35 {
+            togglePinSelection()
             return true
         }
 

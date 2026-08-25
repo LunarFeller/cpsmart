@@ -97,6 +97,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.store.remove(id: entry.id)
             self.historyWindow.refresh(entries: self.store.entries)
         }
+        historyWindow.onTogglePin = { [weak self] entry in
+            guard let self else { return }
+            self.store.togglePin(id: entry.id)
+            self.historyWindow.refresh(entries: self.store.entries)
+        }
     }
 
     private func configureStatusItem() {
@@ -154,6 +159,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(clearHistory),
             keyEquivalent: ""
         ))
+        // 按住 Option 出现：连置顶记录一起清空
+        let clearAllItem = NSMenuItem(
+            title: "清空全部历史（含置顶）…",
+            action: #selector(clearAllHistory),
+            keyEquivalent: ""
+        )
+        clearAllItem.isAlternate = true
+        clearAllItem.keyEquivalentModifierMask = [.option]
+        menu.addItem(clearAllItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "关于 cpsmart",
@@ -221,13 +235,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func clearHistory() {
         let alert = NSAlert()
-        alert.messageText = "清空全部剪贴板历史？"
-        alert.informativeText = "此操作无法撤销。"
+        alert.messageText = "清空剪贴板历史？"
+        alert.informativeText = "置顶的记录会保留。此操作无法撤销。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.clear()
+        historyWindow.refresh(entries: store.entries)
+    }
+
+    @objc private func clearAllHistory() {
+        let alert = NSAlert()
+        alert.messageText = "清空全部剪贴板历史（含置顶）？"
+        alert.informativeText = "置顶的记录也会一并删除。此操作无法撤销。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "全部清空")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.clearAll()
         historyWindow.refresh(entries: store.entries)
     }
 
@@ -239,9 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         • ⇧⌘V：打开或关闭剪贴板历史
         • 默认进入浏览；Tab：在卡片列表与搜索框之间切换
         • ← / →：选择记录；空格：Quick Look 预览
-        • Return：粘贴所选记录；⌘⌫：删除所选记录
+        • Return：粘贴；⌘P：置顶；⌘⌫：删除
         • ⌘1–4：筛选全部、文本、图片或文件
         • Esc：先清除搜索，再关闭窗口
+        • 清空历史会保留置顶；按住 ⌥ 打开菜单可清空全部
         """
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "cpsmart",
