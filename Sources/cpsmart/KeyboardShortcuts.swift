@@ -571,11 +571,12 @@ struct ShortcutMatcher {
         let action = store.action(matching: gesture, among: actions)
         if context == .searching,
            let action,
-           [.togglePin, .addToPinboard, .deleteSelection, .filterAll, .filterText,
-            .filterImage, .filterFiles]
+           [.toggleQuickLook, .togglePin, .addToPinboard, .deleteSelection, .filterAll,
+            .filterText, .filterImage, .filterFiles]
             .contains(action),
            !gesture.modifiers.contains(.command) {
-            // 搜索框中保留无修饰键的编辑和光标行为。此类自定义键仍可在浏览态使用。
+            // 搜索框中保留无修饰键的输入、编辑和光标行为（例如 Space 必须能输入空格）。
+            // 此类自定义键仍可在浏览态使用。
             return nil
         }
         return action

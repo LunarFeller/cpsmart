@@ -897,6 +897,16 @@ struct CoreTests {
             "pinboard shortcut did not resolve in supported contexts"
         )
 
+        let space = makeKeyEvent(keyCode: UInt16(kVK_Space), characters: " ")
+        try require(
+            matcher.action(for: space, context: .browsing) == .toggleQuickLook,
+            "Space did not resolve in browsing context"
+        )
+        try require(
+            matcher.action(for: space, context: .searching) == nil,
+            "Space was intercepted while typing in the search field"
+        )
+
         let optionCommandP = makeKeyEvent(
             keyCode: UInt16(kVK_ANSI_P),
             modifiers: [.option, .command],

@@ -172,6 +172,11 @@ private final class PinboardTabButton: NSButton {
         return true
     }
 
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        // 拖拽被 Esc 取消时不会触发 draggingExited，需要兜底清理高亮。
+        setDropHighlighted(false)
+    }
+
     private func setDropHighlighted(_ isHighlighted: Bool) {
         wantsLayer = true
         layer?.cornerRadius = 6
@@ -655,6 +660,7 @@ final class HistoryWindowController: NSWindowController,
     private var systemThemeObserver: NSObjectProtocol?
     private var shortcutObserver: NSObjectProtocol?
     private var isDismissing = false
+    private var dismissalGeneration = 0
 
     init(shortcutStore: ShortcutStore) {
         self.shortcutStore = shortcutStore
@@ -711,6 +717,7 @@ final class HistoryWindowController: NSWindowController,
 
     deinit {
         removeKeyboardMonitor()
+        adaptivePreviewController.close()
         cleanupQuickLookTempFiles()
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
@@ -746,10 +753,17 @@ final class HistoryWindowController: NSWindowController,
 
     func show(entries: [ClipboardEntry], pinboards: [Pinboard] = []) {
         if window?.isVisible == true {
-            if !isDismissing {
+            if isDismissing {
+                // 退场动画进行中：作废旧动画的完成回调并立即复位，
+                // 避免全局快捷键在 0.12s 动画窗口内被吞掉。
+                dismissalGeneration += 1
+                window?.orderOut(nil)
+                window?.alphaValue = 1
+                isDismissing = false
+            } else {
                 dismiss(restorePreviousApplication: true)
+                return
             }
-            return
         }
 
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
@@ -766,6 +780,7 @@ final class HistoryWindowController: NSWindowController,
         allEntries = entries
         query = ""
         searchField.stringValue = ""
+        searchField.placeholderString = "搜索剪贴板历史"
         typeFilter = .all
         filterControl.selectedSegment = 0
         selectedIndex = 0
@@ -831,9 +846,11 @@ final class HistoryWindowController: NSWindowController,
         } else if selectedPinboardID != nil {
             selectedPinboardID = nil
             allEntries = historyEntries
+            searchField.placeholderString = "搜索剪贴板历史"
             refilter(fallbackIndex: 0)
         }
         rebuildPinboardTabs()
+        refreshQuickLookIfNeeded()
     }
 
     // MARK: 界面搭建
@@ -1201,6 +1218,9 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func switchSource(to pinboardID: UUID?) {
+        // 切换数据源后原预览指向的条目可能已不在列表中，先关闭再重建状态。
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
         selectedPinboardID = pinboardID
         if let pinboardID,
            let board = pinboards.first(where: { $0.id == pinboardID }) {
@@ -1331,8 +1351,12 @@ final class HistoryWindowController: NSWindowController,
     }
 
     @objc private func showFavoriteMenu(_ sender: NSButton) {
-        guard selectedPinboardID == nil,
-              visibleEntries.indices.contains(selectedIndex) else { return }
+        guard selectedPinboardID == nil else {
+            // 收藏板内的内容已在收藏板中，再次收藏没有意义。
+            NSSound.beep()
+            return
+        }
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
         let entry = visibleEntries[selectedIndex]
         guard !pinboards.isEmpty else {
             promptToCreatePinboard(adding: entry)
@@ -1600,6 +1624,19 @@ final class HistoryWindowController: NSWindowController,
         }
     }
 
+    /// 鼠标点选、键盘切换或收藏板刷新后，让已打开的 Quick Look 跟随当前选择。
+    private func refreshQuickLookIfNeeded() {
+        guard isQuickLookVisible else { return }
+        guard visibleEntries.indices.contains(selectedIndex),
+              prepareQuickLookPreview(),
+              let panel = QLPreviewPanel.shared() else {
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+            return
+        }
+        panel.reloadData()
+        positionQuickLookPanel(panel)
+    }
+
     private func closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: Bool) {
         if isAdaptivePreviewVisible {
             adaptivePreviewController.close()
@@ -1818,8 +1855,12 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func togglePinSelection() {
-        guard selectedPinboardID == nil,
-              visibleEntries.indices.contains(selectedIndex) else { return }
+        // 收藏板内顺序由拖动排序管理，置顶没有语义；给出可感知反馈而不是静默吞键。
+        guard selectedPinboardID == nil else {
+            NSSound.beep()
+            return
+        }
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
         onTogglePin?(visibleEntries[selectedIndex])
     }
 
@@ -1895,6 +1936,8 @@ final class HistoryWindowController: NSWindowController,
     private func dismiss(restorePreviousApplication: Bool) {
         guard let window, window.isVisible, !isDismissing else { return }
         isDismissing = true
+        dismissalGeneration += 1
+        let generation = dismissalGeneration
         removeKeyboardMonitor()
         closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
         closeQuickLookIfNeeded(restoreBrowsingFocus: false)
@@ -1904,6 +1947,8 @@ final class HistoryWindowController: NSWindowController,
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self, weak window] in
             guard let self else { return }
+            // 动画期间若被重新唤起，此回调已作废，不能隐藏新窗口。
+            guard generation == self.dismissalGeneration else { return }
             window?.orderOut(nil)
             window?.alphaValue = 1
             self.isDismissing = false
@@ -1963,14 +2008,18 @@ final class HistoryWindowController: NSWindowController,
 
     private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
         if isAdaptivePreviewVisible {
-            switch event.keyCode {
-            case 49, 53:
+            // 与 Quick Look 使用同一组上下文，确保自定义快捷键在轻量预览中同样生效。
+            switch shortcutMatcher.action(for: event, context: .quickLook) {
+            case .toggleQuickLook, .clearSearchOrClose:
                 if !event.isARepeat {
                     closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: true)
                 }
                 return true
-            case 123, 124:
-                moveSelection(by: event.keyCode == 123 ? -1 : 1)
+            case .selectPrevious:
+                moveSelection(by: -1)
+                return true
+            case .selectNext:
+                moveSelection(by: 1)
                 return true
             default:
                 // 允许 ⌘C 等文本选择相关快捷键继续交给只读预览文本。
@@ -1986,17 +2035,10 @@ final class HistoryWindowController: NSWindowController,
                 }
             case .selectPrevious:
                 moveSelection(by: -1)
-                if prepareQuickLookPreview() {
-                    QLPreviewPanel.shared()?.reloadData()
-                }
+                refreshQuickLookIfNeeded()
             case .selectNext:
                 moveSelection(by: 1)
-                if prepareQuickLookPreview() {
-                    if let panel = QLPreviewPanel.shared() {
-                        panel.reloadData()
-                        positionQuickLookPanel(panel)
-                    }
-                }
+                refreshQuickLookIfNeeded()
             default:
                 break
             }
@@ -2230,5 +2272,6 @@ final class HistoryWindowController: NSWindowController,
         selectedIndex = indexPath.item
         chooseEntry(at: indexPath.item)
         refreshAdaptivePreviewIfNeeded()
+        refreshQuickLookIfNeeded()
     }
 }

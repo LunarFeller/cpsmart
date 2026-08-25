@@ -1059,7 +1059,7 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         cancelAllRecorders(except: nil)
         let alert = NSAlert()
         alert.messageText = "恢复所有默认快捷键？"
-        alert.informativeText = "13 项快捷键会恢复为安装时的设置。"
+        alert.informativeText = "\(ShortcutActionID.allCases.count) 项快捷键会恢复为安装时的设置。"
         alert.addButton(withTitle: "恢复全部默认")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
