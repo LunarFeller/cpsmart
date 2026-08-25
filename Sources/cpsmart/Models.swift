@@ -32,10 +32,23 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
     let id: UUID
     let payload: ClipboardPayload
     let createdAt: Date
+    let sourceAppName: String?
+    let sourceAppBundleID: String?
+    let isPinned: Bool?
 
-    init(id: UUID = UUID(), payload: ClipboardPayload, createdAt: Date = Date()) {
+    init(
+        id: UUID = UUID(),
+        payload: ClipboardPayload,
+        createdAt: Date = Date(),
+        sourceAppName: String? = nil,
+        sourceAppBundleID: String? = nil,
+        isPinned: Bool? = nil
+    ) {
         self.id = id
         self.payload = payload
         self.createdAt = createdAt
+        self.sourceAppName = sourceAppName
+        self.sourceAppBundleID = sourceAppBundleID
+        self.isPinned = isPinned
     }
 }
