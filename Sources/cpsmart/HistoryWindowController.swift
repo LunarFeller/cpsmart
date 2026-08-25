@@ -693,12 +693,19 @@ final class HistoryWindowController: NSWindowController,
         }
     }
 
-    func refresh(entries: [ClipboardEntry]) {
-        let selectedID = visibleEntries.indices.contains(selectedIndex)
-            ? visibleEntries[selectedIndex].id
-            : nil
+    func refresh(entries: [ClipboardEntry], selectingEntryID: UUID? = nil) {
+        // 普通刷新保留当前选择；剪贴板捕获刷新则聚焦刚加入的记录，
+        // 避免旧选择随着新记录插入不断右移并把最新内容留在屏幕左侧之外。
+        let selectedID = selectingEntryID ?? (
+            visibleEntries.indices.contains(selectedIndex)
+                ? visibleEntries[selectedIndex].id
+                : nil
+        )
         allEntries = entries
-        refilter(selectingID: selectedID, fallbackIndex: selectedIndex)
+        refilter(
+            selectingID: selectedID,
+            fallbackIndex: selectingEntryID == nil ? selectedIndex : 0
+        )
     }
 
     // MARK: 界面搭建
