@@ -11,6 +11,7 @@ private extension ShortcutActionID {
         case .pasteSelection: return "把当前卡片粘贴到之前使用的应用"
         case .toggleQuickLook: return "预览当前选中的内容"
         case .togglePin: return "保留常用内容，不受自动清理影响"
+        case .addToPinboard: return "把当前内容保存到命名和着色的收藏板"
         case .deleteSelection: return "移除当前选中的历史记录"
         case .filterAll: return "显示所有类型的内容"
         case .filterText: return "只显示文本内容"
@@ -783,10 +784,11 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
 
         addSection(
             title: "常用操作",
-            subtitle: "粘贴、预览和退出是使用频率最高的窗口内动作。",
+            subtitle: "粘贴、预览、收藏和退出是使用频率最高的窗口内动作。",
             card: makeCard(items: [
                 makeRow(for: .pasteSelection),
                 makeRow(for: .toggleQuickLook),
+                makeRow(for: .addToPinboard),
                 makeRow(for: .clearSearchOrClose)
             ]),
             to: contentStack

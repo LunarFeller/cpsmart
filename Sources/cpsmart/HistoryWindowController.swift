@@ -104,10 +104,88 @@ private final class KeyboardCollectionView: NSCollectionView {
     }
 }
 
+private struct PinboardDragDescriptor {
+    let entryID: UUID
+    let sourcePinboardID: UUID?
+
+    static let pasteboardType = NSPasteboard.PasteboardType("com.cpsmart.pinboard-entry")
+
+    func pasteboardItem() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        var value = entryID.uuidString
+        if let sourcePinboardID {
+            value += "|\(sourcePinboardID.uuidString)"
+        }
+        item.setString(value, forType: Self.pasteboardType)
+        return item
+    }
+
+    static func read(from pasteboard: NSPasteboard) -> PinboardDragDescriptor? {
+        guard let rawValue = pasteboard.string(forType: pasteboardType) else { return nil }
+        let parts = rawValue.split(separator: "|", maxSplits: 1).map(String.init)
+        guard let entryID = UUID(uuidString: parts[0]) else { return nil }
+        let sourcePinboardID = parts.count == 2 ? UUID(uuidString: parts[1]) : nil
+        return PinboardDragDescriptor(entryID: entryID, sourcePinboardID: sourcePinboardID)
+    }
+}
+
+private final class PinboardTabButton: NSButton {
+    var onAcceptHistoryEntry: ((UUID) -> Void)? {
+        didSet {
+            if onAcceptHistoryEntry != nil {
+                registerForDraggedTypes([PinboardDragDescriptor.pasteboardType])
+            }
+        }
+    }
+
+    var dropHighlightColor: NSColor = .controlAccentColor
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              onAcceptHistoryEntry != nil else { return [] }
+        setDropHighlighted(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              onAcceptHistoryEntry != nil else { return [] }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        setDropHighlighted(false)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PinboardDragDescriptor.read(from: sender.draggingPasteboard)?.sourcePinboardID == nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { setDropHighlighted(false) }
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              let onAcceptHistoryEntry else { return false }
+        onAcceptHistoryEntry(descriptor.entryID)
+        return true
+    }
+
+    private func setDropHighlighted(_ isHighlighted: Bool) {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = isHighlighted ? 2 : 0
+        layer?.borderColor = dropHighlightColor.cgColor
+    }
+}
+
 private final class ClickableCardView: NSView {
     var onClick: ((Int) -> Void)?
+    var onDrag: ((NSEvent, NSView) -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
+    private var didBeginDrag = false
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -147,8 +225,19 @@ private final class ClickableCardView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        didBeginDrag = false
         window?.makeKey()
         onClick?(event.clickCount)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !didBeginDrag else { return }
+        didBeginDrag = true
+        onDrag?(event, self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        didBeginDrag = false
     }
 
     override func accessibilityPerformPress() -> Bool {
@@ -162,6 +251,10 @@ private final class ClickableCardView: NSView {
 private final class HistoryCollectionItem: NSCollectionViewItem {
     var onClick: ((Int) -> Void)? {
         didSet { cardView.onClick = onClick }
+    }
+
+    var onDrag: ((NSEvent, NSView) -> Void)? {
+        didSet { cardView.onDrag = onDrag }
     }
 
     private let cardView = ClickableCardView()
@@ -509,12 +602,20 @@ final class HistoryWindowController: NSWindowController,
     NSSearchFieldDelegate,
     NSWindowDelegate,
     QLPreviewPanelDataSource,
-    QLPreviewPanelDelegate
+    QLPreviewPanelDelegate,
+    NSDraggingSource
 {
     var onChoose: ((ClipboardEntry) -> Void)?
     var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
     var onDelete: ((ClipboardEntry) -> Void)?
     var onTogglePin: ((ClipboardEntry) -> Void)?
+    var onCreatePinboard: ((String, PinboardColor) -> Pinboard?)?
+    var onRenamePinboard: ((UUID, String) -> Void)?
+    var onSetPinboardColor: ((UUID, PinboardColor) -> Void)?
+    var onDeletePinboard: ((UUID) -> Void)?
+    var onAddToPinboard: ((ClipboardEntry, UUID) -> Void)?
+    var onRemoveFromPinboard: ((ClipboardEntry, UUID) -> Void)?
+    var onMovePinboardEntry: ((UUID, UUID, Int) -> Void)?
 
     private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
     private let collectionView = KeyboardCollectionView()
@@ -525,7 +626,8 @@ final class HistoryWindowController: NSWindowController,
     private let shortcutMatcher: ShortcutMatcher
     private let searchField = NSSearchField()
     private var filterControl: NSSegmentedControl!
-    private let titleLabel = NSTextField(labelWithString: "cpsmart")
+    private let favoriteButton = NSButton()
+    private let boardStackView = NSStackView()
     private let countLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "")
@@ -534,6 +636,9 @@ final class HistoryWindowController: NSWindowController,
     private var tintView: NSView!
 
     private var palette = AppVisualTheme.palette(isDark: true)
+    private var historyEntries: [ClipboardEntry] = []
+    private var pinboards: [Pinboard] = []
+    private var selectedPinboardID: UUID?
     private var allEntries: [ClipboardEntry] = []
     private var visibleEntries: [ClipboardEntry] = []
     private var query = ""
@@ -629,17 +734,17 @@ final class HistoryWindowController: NSWindowController,
         tintView?.layer?.backgroundColor = palette.panelTint.cgColor
         effectView?.layer?.borderColor = palette.panelBorder.cgColor
 
-        titleLabel.textColor = palette.textPrimary
         countLabel.textColor = palette.textTertiary
         statusLabel.textColor = palette.textSecondary
         hintLabel.textColor = palette.textTertiary
         emptyLabel.textColor = palette.textTertiary
 
         // 卡片颜色由各 item 在 configure 时按 palette 重写
+        rebuildPinboardTabs()
         reloadCollection(selecting: visibleEntries.isEmpty ? nil : selectedIndex, notify: false)
     }
 
-    func show(entries: [ClipboardEntry]) {
+    func show(entries: [ClipboardEntry], pinboards: [Pinboard] = []) {
         if window?.isVisible == true {
             if !isDismissing {
                 dismiss(restorePreviousApplication: true)
@@ -655,12 +760,16 @@ final class HistoryWindowController: NSWindowController,
             previousApplication = lastExternalApplication
         }
 
+        historyEntries = entries
+        self.pinboards = pinboards
+        selectedPinboardID = nil
         allEntries = entries
         query = ""
         searchField.stringValue = ""
         typeFilter = .all
         filterControl.selectedSegment = 0
         selectedIndex = 0
+        rebuildPinboardTabs()
 
         guard let window else { return }
         let finalFrame = targetFrame()
@@ -697,11 +806,34 @@ final class HistoryWindowController: NSWindowController,
                 ? visibleEntries[selectedIndex].id
                 : nil
         )
+        historyEntries = entries
+        guard selectedPinboardID == nil else {
+            rebuildPinboardTabs()
+            return
+        }
         allEntries = entries
         refilter(
             selectingID: selectedID,
             fallbackIndex: selectingEntryID == nil ? selectedIndex : 0
         )
+    }
+
+    func refresh(pinboards: [Pinboard]) {
+        let selectedID = visibleEntries.indices.contains(selectedIndex)
+            ? visibleEntries[selectedIndex].id
+            : nil
+        self.pinboards = pinboards
+        if let boardID = selectedPinboardID,
+           let board = pinboards.first(where: { $0.id == boardID }) {
+            allEntries = board.entries
+            searchField.placeholderString = "搜索“\(board.name)”"
+            refilter(selectingID: selectedID, fallbackIndex: selectedIndex)
+        } else if selectedPinboardID != nil {
+            selectedPinboardID = nil
+            allEntries = historyEntries
+            refilter(fallbackIndex: 0)
+        }
+        rebuildPinboardTabs()
     }
 
     // MARK: 界面搭建
@@ -740,11 +872,10 @@ final class HistoryWindowController: NSWindowController,
         headerContainer.translatesAutoresizingMaskIntoConstraints = false
         effectView.addSubview(headerContainer)
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
         countLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         countLabel.translatesAutoresizingMaskIntoConstraints = false
+        countLabel.setContentHuggingPriority(.required, for: .horizontal)
+        countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.placeholderString = "搜索剪贴板历史"
@@ -761,15 +892,66 @@ final class HistoryWindowController: NSWindowController,
         filterControl.controlSize = .small
         filterControl.selectedSegment = 0
 
+        favoriteButton.translatesAutoresizingMaskIntoConstraints = false
+        favoriteButton.title = "收藏到…"
+        favoriteButton.image = NSImage(
+            systemSymbolName: "star",
+            accessibilityDescription: "收藏到收藏板"
+        )
+        favoriteButton.imagePosition = .imageLeading
+        favoriteButton.bezelStyle = .roundRect
+        favoriteButton.controlSize = .small
+        favoriteButton.target = self
+        favoriteButton.action = #selector(showFavoriteMenu(_:))
+
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         statusLabel.alignment = .right
+        statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        headerContainer.addSubview(titleLabel)
         headerContainer.addSubview(countLabel)
         headerContainer.addSubview(searchField)
         headerContainer.addSubview(filterControl)
+        headerContainer.addSubview(favoriteButton)
         headerContainer.addSubview(statusLabel)
+
+        // 收藏板标签与头部合并为一行；历史记录固定在最左，收藏板过多时横向滚动。
+        let boardScrollView = NSScrollView()
+        boardScrollView.translatesAutoresizingMaskIntoConstraints = false
+        boardScrollView.drawsBackground = false
+        boardScrollView.hasHorizontalScroller = false
+        boardScrollView.hasVerticalScroller = false
+        boardScrollView.horizontalScrollElasticity = .automatic
+        let boardMinimumWidthConstraint = boardScrollView.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: 150
+        )
+        boardMinimumWidthConstraint.priority = .defaultHigh
+        boardMinimumWidthConstraint.isActive = true
+
+        let boardDocumentView = NSView()
+        boardDocumentView.translatesAutoresizingMaskIntoConstraints = false
+        boardScrollView.documentView = boardDocumentView
+        headerContainer.addSubview(boardScrollView)
+
+        boardStackView.translatesAutoresizingMaskIntoConstraints = false
+        boardStackView.orientation = .horizontal
+        boardStackView.alignment = .centerY
+        boardStackView.spacing = 7
+        boardDocumentView.addSubview(boardStackView)
+        NSLayoutConstraint.activate([
+            boardDocumentView.leadingAnchor.constraint(equalTo: boardScrollView.contentView.leadingAnchor),
+            boardDocumentView.topAnchor.constraint(equalTo: boardScrollView.contentView.topAnchor),
+            boardDocumentView.bottomAnchor.constraint(equalTo: boardScrollView.contentView.bottomAnchor),
+            boardDocumentView.widthAnchor.constraint(
+                greaterThanOrEqualTo: boardScrollView.contentView.widthAnchor
+            ),
+            boardStackView.leadingAnchor.constraint(equalTo: boardDocumentView.leadingAnchor),
+            boardStackView.trailingAnchor.constraint(
+                lessThanOrEqualTo: boardDocumentView.trailingAnchor
+            ),
+            boardStackView.centerYAnchor.constraint(equalTo: boardDocumentView.centerYAnchor)
+        ])
 
         // 卡片流
         let scrollView = NSScrollView()
@@ -797,6 +979,8 @@ final class HistoryWindowController: NSWindowController,
             HistoryCollectionItem.self,
             forItemWithIdentifier: Self.itemIdentifier
         )
+        collectionView.registerForDraggedTypes([PinboardDragDescriptor.pasteboardType])
+        collectionView.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
         collectionView.onBackgroundClick = { [weak self] in
             self?.focusCollectionView()
         }
@@ -829,26 +1013,30 @@ final class HistoryWindowController: NSWindowController,
             headerContainer.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 14),
             headerContainer.heightAnchor.constraint(equalToConstant: 28),
 
-            titleLabel.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            countLabel.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
+            countLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
 
-            countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
-            countLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
-
-            searchField.leadingAnchor.constraint(equalTo: countLabel.trailingAnchor, constant: 16),
+            searchField.leadingAnchor.constraint(equalTo: countLabel.trailingAnchor, constant: 12),
             searchField.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 240),
 
+            boardScrollView.leadingAnchor.constraint(equalTo: searchField.trailingAnchor, constant: 14),
+            boardScrollView.trailingAnchor.constraint(equalTo: filterControl.leadingAnchor, constant: -14),
+            boardScrollView.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            boardScrollView.heightAnchor.constraint(equalToConstant: 28),
+
             statusLabel.trailingAnchor.constraint(equalTo: headerContainer.trailingAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
 
-            filterControl.trailingAnchor.constraint(
+            favoriteButton.trailingAnchor.constraint(
                 equalTo: statusLabel.leadingAnchor, constant: -14
             ),
+            favoriteButton.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            favoriteButton.widthAnchor.constraint(equalToConstant: 88),
+
+            filterControl.trailingAnchor.constraint(equalTo: favoriteButton.leadingAnchor, constant: -8),
             filterControl.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
-            filterControl.leadingAnchor.constraint(
-                greaterThanOrEqualTo: searchField.trailingAnchor, constant: 14
-            ),
 
             scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
@@ -863,6 +1051,337 @@ final class HistoryWindowController: NSWindowController,
         ])
 
         updateHintLabel()
+        rebuildPinboardTabs()
+    }
+
+    // MARK: 收藏板
+
+    private func rebuildPinboardTabs() {
+        guard isWindowLoaded else { return }
+        for view in boardStackView.arrangedSubviews {
+            boardStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let historyButton = makeBoardButton(
+            title: "历史记录",
+            color: nil,
+            isSelected: selectedPinboardID == nil,
+            action: #selector(selectHistoryTab(_:))
+        )
+        historyButton.toolTip = "动态剪贴板历史"
+        boardStackView.addArrangedSubview(historyButton)
+
+        for board in pinboards {
+            let button = makeBoardButton(
+                title: board.name,
+                color: board.color,
+                isSelected: selectedPinboardID == board.id,
+                action: #selector(selectPinboardTab(_:))
+            )
+            button.identifier = NSUserInterfaceItemIdentifier(board.id.uuidString)
+            button.toolTip = "打开“\(board.name)”；右键可重命名、改色或删除"
+            button.menu = makePinboardContextMenu(for: board)
+            button.dropHighlightColor = palette.pinboardColor(board.color)
+            button.onAcceptHistoryEntry = { [weak self] entryID in
+                DispatchQueue.main.async { [weak self] in
+                    self?.addDraggedHistoryEntry(entryID, to: board.id)
+                }
+            }
+            boardStackView.addArrangedSubview(button)
+        }
+
+        let addButton = makeBoardButton(
+            title: "",
+            color: nil,
+            isSelected: false,
+            action: #selector(createPinboardFromTab(_:))
+        )
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新建收藏板")
+        addButton.imagePosition = .imageOnly
+        addButton.toolTip = "新建收藏板"
+        addButton.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        boardStackView.addArrangedSubview(addButton)
+    }
+
+    private func makeBoardButton(
+        title: String,
+        color: PinboardColor?,
+        isSelected: Bool,
+        action: Selector
+    ) -> PinboardTabButton {
+        let button = PinboardTabButton(title: title, target: self, action: action)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.bezelStyle = .roundRect
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11.5, weight: isSelected ? .semibold : .medium)
+        button.state = isSelected ? .on : .off
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        if let color {
+            let resolvedColor = palette.pinboardColor(color)
+            button.image = Self.pinboardColorDot(resolvedColor)
+            button.imagePosition = .imageLeading
+            if isSelected {
+                button.bezelColor = resolvedColor.withAlphaComponent(0.28)
+            }
+        } else if isSelected {
+            button.bezelColor = palette.accent.withAlphaComponent(0.22)
+        }
+        return button
+    }
+
+    private static func pinboardColorDot(_ color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: 9, height: 9))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 0.5, y: 0.5, width: 8, height: 8)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func addDraggedHistoryEntry(_ entryID: UUID, to boardID: UUID) {
+        guard let entry = historyEntries.first(where: { $0.id == entryID }),
+              let board = pinboards.first(where: { $0.id == boardID }) else { return }
+        let alreadyContainsEntry = board.entries.contains { $0.payload == entry.payload }
+        onAddToPinboard?(entry, boardID)
+        statusLabel.stringValue = alreadyContainsEntry
+            ? "这项内容已在“\(board.name)”中"
+            : "已收藏到“\(board.name)”"
+        statusLabel.textColor = palette.accent
+    }
+
+    private func makePinboardContextMenu(for board: Pinboard) -> NSMenu {
+        let menu = NSMenu()
+
+        let renameItem = NSMenuItem(
+            title: "重命名…",
+            action: #selector(renamePinboardFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        renameItem.target = self
+        renameItem.representedObject = board.id.uuidString
+        menu.addItem(renameItem)
+
+        let colorItem = NSMenuItem(title: "颜色", action: nil, keyEquivalent: "")
+        let colorMenu = NSMenu()
+        for color in PinboardColor.allCases {
+            let item = NSMenuItem(
+                title: color.displayName,
+                action: #selector(changePinboardColorFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.state = board.color == color ? .on : .off
+            item.representedObject = "\(board.id.uuidString)|\(color.rawValue)"
+            colorMenu.addItem(item)
+        }
+        colorItem.submenu = colorMenu
+        menu.addItem(colorItem)
+        menu.addItem(.separator())
+
+        let deleteItem = NSMenuItem(
+            title: "删除收藏板…",
+            action: #selector(deletePinboardFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        deleteItem.target = self
+        deleteItem.representedObject = board.id.uuidString
+        menu.addItem(deleteItem)
+        return menu
+    }
+
+    @objc private func selectHistoryTab(_ sender: NSButton) {
+        switchSource(to: nil)
+    }
+
+    @objc private func selectPinboardTab(_ sender: NSButton) {
+        guard let rawID = sender.identifier?.rawValue, let id = UUID(uuidString: rawID) else { return }
+        switchSource(to: id)
+    }
+
+    private func switchSource(to pinboardID: UUID?) {
+        selectedPinboardID = pinboardID
+        if let pinboardID,
+           let board = pinboards.first(where: { $0.id == pinboardID }) {
+            allEntries = board.entries
+            searchField.placeholderString = "搜索“\(board.name)”"
+        } else {
+            selectedPinboardID = nil
+            allEntries = historyEntries
+            searchField.placeholderString = "搜索剪贴板历史"
+        }
+        query = ""
+        searchField.stringValue = ""
+        typeFilter = .all
+        filterControl.selectedSegment = 0
+        selectedIndex = 0
+        rebuildPinboardTabs()
+        refilter(fallbackIndex: 0)
+        focusCollectionView()
+    }
+
+    @objc private func createPinboardFromTab(_ sender: NSButton) {
+        promptToCreatePinboard(adding: nil)
+    }
+
+    private func promptToCreatePinboard(adding entry: ClipboardEntry?) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "新建收藏板"
+        alert.informativeText = "收藏板用于长期保存常用文本、命令、图片或文件。"
+        alert.addButton(withTitle: "创建")
+        alert.addButton(withTitle: "取消")
+
+        let nameField = NSTextField(string: "")
+        nameField.placeholderString = "名称，例如：常用命令"
+        let colorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        colorPopup.addItems(withTitles: PinboardColor.allCases.map(\.displayName))
+        colorPopup.selectItem(at: pinboards.count % PinboardColor.allCases.count)
+
+        let form = NSStackView(views: [nameField, colorPopup])
+        form.orientation = .vertical
+        form.spacing = 8
+        form.frame = NSRect(x: 0, y: 0, width: 280, height: 58)
+        alert.accessoryView = form
+        alert.window.initialFirstResponder = nameField
+
+        alert.beginSheetModal(for: window) { [weak self, weak nameField, weak colorPopup] response in
+            guard response == .alertFirstButtonReturn,
+                  let self,
+                  let name = nameField?.stringValue,
+                  let selectedIndex = colorPopup?.indexOfSelectedItem,
+                  PinboardColor.allCases.indices.contains(selectedIndex) else {
+                return
+            }
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.statusLabel.stringValue = "收藏板名称不能为空"
+                self.statusLabel.textColor = .systemOrange
+                NSSound.beep()
+                DispatchQueue.main.async { [weak self] in
+                    self?.promptToCreatePinboard(adding: entry)
+                }
+                return
+            }
+            guard let board = self.onCreatePinboard?(
+                name,
+                PinboardColor.allCases[selectedIndex]
+            ) else { return }
+            if let entry {
+                self.onAddToPinboard?(entry, board.id)
+                self.statusLabel.stringValue = "已收藏到“\(board.name)”"
+                self.statusLabel.textColor = self.palette.accent
+            } else {
+                self.switchSource(to: board.id)
+            }
+        }
+    }
+
+    @objc private func renamePinboardFromMenu(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              let window else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "重命名收藏板"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        let nameField = NSTextField(string: board.name)
+        nameField.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = nameField
+        alert.window.initialFirstResponder = nameField
+        alert.beginSheetModal(for: window) { [weak self, weak nameField] response in
+            guard response == .alertFirstButtonReturn,
+                  let name = nameField?.stringValue else { return }
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self?.statusLabel.stringValue = "收藏板名称不能为空"
+                self?.statusLabel.textColor = .systemOrange
+                NSSound.beep()
+                return
+            }
+            self?.onRenamePinboard?(id, name)
+        }
+    }
+
+    @objc private func changePinboardColorFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String else { return }
+        let parts = rawValue.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let id = UUID(uuidString: parts[0]),
+              let color = PinboardColor(rawValue: parts[1]) else { return }
+        onSetPinboardColor?(id, color)
+    }
+
+    @objc private func deletePinboardFromMenu(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除收藏板“\(board.name)”？"
+        alert.informativeText = "其中的 \(board.entries.count) 项收藏会一并删除，此操作无法撤销。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.onDeletePinboard?(id)
+        }
+    }
+
+    @objc private func showFavoriteMenu(_ sender: NSButton) {
+        guard selectedPinboardID == nil,
+              visibleEntries.indices.contains(selectedIndex) else { return }
+        let entry = visibleEntries[selectedIndex]
+        guard !pinboards.isEmpty else {
+            promptToCreatePinboard(adding: entry)
+            return
+        }
+
+        let menu = NSMenu()
+        for board in pinboards {
+            let item = NSMenuItem(
+                title: board.name,
+                action: #selector(addSelectionToPinboard(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = board.id.uuidString
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let createItem = NSMenuItem(
+            title: "新建收藏板…",
+            action: #selector(createPinboardForSelection(_:)),
+            keyEquivalent: ""
+        )
+        createItem.target = self
+        menu.addItem(createItem)
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: sender.bounds.height + 3),
+            in: sender
+        )
+    }
+
+    @objc private func addSelectionToPinboard(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              visibleEntries.indices.contains(selectedIndex) else { return }
+        let entry = visibleEntries[selectedIndex]
+        let alreadyContainsEntry = board.entries.contains { $0.payload == entry.payload }
+        onAddToPinboard?(entry, id)
+        statusLabel.stringValue = alreadyContainsEntry
+            ? "这项内容已在“\(board.name)”中"
+            : "已收藏到“\(board.name)”"
+        statusLabel.textColor = palette.accent
+    }
+
+    @objc private func createPinboardForSelection(_ sender: NSMenuItem) {
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
+        promptToCreatePinboard(adding: visibleEntries[selectedIndex])
     }
 
     // MARK: 布局与定位
@@ -952,8 +1471,12 @@ final class HistoryWindowController: NSWindowController,
             ? "匹配 \(visibleEntries.count) / \(allEntries.count)"
             : "\(allEntries.count) 项"
 
+        favoriteButton.isHidden = selectedPinboardID != nil || visibleEntries.isEmpty
+
         if allEntries.isEmpty {
-            emptyLabel.stringValue = "还没有记录 · 先复制一些文本、图片或文件"
+            emptyLabel.stringValue = selectedPinboardID == nil
+                ? "还没有记录 · 先复制一些文本、图片或文件"
+                : "这个收藏板还是空的 · 回到历史记录选择内容并收藏"
             emptyLabel.isHidden = false
         } else if visibleEntries.isEmpty {
             emptyLabel.stringValue = query.isEmpty
@@ -971,11 +1494,18 @@ final class HistoryWindowController: NSWindowController,
         let preview = shortcutStore.displayString(for: .toggleQuickLook)
         let paste = shortcutStore.displayString(for: .pasteSelection)
         let close = shortcutStore.displayString(for: .clearSearchOrClose)
-        if isSearchFieldFocused {
+        let favorite = shortcutStore.displayString(for: .addToPinboard)
+        let delete = shortcutStore.displayString(for: .deleteSelection)
+        let isFiltering = !query.isEmpty || typeFilter != .all
+        if selectedPinboardID != nil, isFiltering, !isSearchFieldFocused {
+            hintLabel.stringValue = "当前正在筛选 · 清除搜索并选择“全部”后可拖动调整顺序"
+        } else if isSearchFieldFocused {
             let closeHint = query.isEmpty ? "\(close) 关闭" : "\(close) 清除搜索"
             hintLabel.stringValue = "输入筛选 · \(search) 返回浏览 · \(preview) 预览 · \(paste) 粘贴 · \(closeHint)"
+        } else if selectedPinboardID != nil {
+            hintLabel.stringValue = "单击复制 · \(preview) 预览 · \(search) 搜索 · \(delete) 移出 · \(paste) 粘贴 · \(close) 关闭"
         } else {
-            hintLabel.stringValue = "单击选择并复制 · \(preview) 预览 · \(search) 搜索 · \(paste) 粘贴 · \(close) 关闭"
+            hintLabel.stringValue = "单击复制 · \(preview) 预览 · \(search) 搜索 · \(favorite) 收藏 · \(paste) 粘贴 · \(close) 关闭"
         }
     }
 
@@ -1279,11 +1809,17 @@ final class HistoryWindowController: NSWindowController,
 
     private func deleteSelection() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
-        onDelete?(visibleEntries[selectedIndex])
+        let entry = visibleEntries[selectedIndex]
+        if let selectedPinboardID {
+            onRemoveFromPinboard?(entry, selectedPinboardID)
+        } else {
+            onDelete?(entry)
+        }
     }
 
     private func togglePinSelection() {
-        guard visibleEntries.indices.contains(selectedIndex) else { return }
+        guard selectedPinboardID == nil,
+              visibleEntries.indices.contains(selectedIndex) else { return }
         onTogglePin?(visibleEntries[selectedIndex])
     }
 
@@ -1310,6 +1846,32 @@ final class HistoryWindowController: NSWindowController,
         guard visibleEntries.indices.contains(index) else { return }
         selectAndChoose(index: index, notifyWhenUnchanged: true)
         togglePreview()
+    }
+
+    func applyDemoPinboard(at index: Int) {
+        guard pinboards.indices.contains(index) else { return }
+        switchSource(to: pinboards[index].id)
+    }
+
+    /// 开发用：直接渲染浮窗内容，避免多屏坐标和窗口共享策略影响自动截图。
+    @discardableResult
+    func writeDemoSnapshot(to url: URL) -> Bool {
+        guard let contentView = window?.contentView else { return false }
+        contentView.layoutSubtreeIfNeeded()
+        guard let representation = contentView.bitmapImageRepForCachingDisplay(
+            in: contentView.bounds
+        ) else { return false }
+        contentView.cacheDisplay(in: contentView.bounds, to: representation)
+        guard let data = representation.representation(using: .png, properties: [:]) else {
+            return false
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            NSLog("cpsmart could not write demo snapshot: %@", error.localizedDescription)
+            return false
+        }
     }
     #endif
 
@@ -1477,6 +2039,8 @@ final class HistoryWindowController: NSWindowController,
             }
         case .togglePin:
             togglePinSelection()
+        case .addToPinboard:
+            showFavoriteMenu(favoriteButton)
         case .deleteSelection:
             deleteSelection()
         case .filterAll:
@@ -1543,8 +2107,9 @@ final class HistoryWindowController: NSWindowController,
             withIdentifier: Self.itemIdentifier,
             for: indexPath
         ) as! HistoryCollectionItem
+        let representedEntry = visibleEntries[indexPath.item]
         item.configure(
-            with: visibleEntries[indexPath.item],
+            with: representedEntry,
             thumbnails: thumbnailProvider,
             palette: palette
         )
@@ -1556,7 +2121,105 @@ final class HistoryWindowController: NSWindowController,
                 self.confirmAndPaste()
             }
         }
+        item.onDrag = { [weak self] event, sourceView in
+            self?.beginCardDrag(entry: representedEntry, event: event, sourceView: sourceView)
+        }
         return item
+    }
+
+    private func beginCardDrag(entry: ClipboardEntry, event: NSEvent, sourceView: NSView) {
+        if selectedPinboardID != nil, (!query.isEmpty || typeFilter != .all) {
+            NSSound.beep()
+            statusLabel.stringValue = "清除搜索并选择“全部”后可调整收藏顺序"
+            statusLabel.textColor = .systemOrange
+            return
+        }
+
+        let descriptor = PinboardDragDescriptor(
+            entryID: entry.id,
+            sourcePinboardID: selectedPinboardID
+        )
+        let draggingItem = NSDraggingItem(pasteboardWriter: descriptor.pasteboardItem())
+        let frame = sourceView.convert(sourceView.bounds, to: collectionView)
+        draggingItem.setDraggingFrame(frame, contents: snapshotImage(of: sourceView))
+        let session = collectionView.beginDraggingSession(
+            with: [draggingItem],
+            event: event,
+            source: self
+        )
+        session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+
+    private func snapshotImage(of view: NSView) -> NSImage {
+        guard let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return NSImage(size: view.bounds.size)
+        }
+        view.cacheDisplay(in: view.bounds, to: representation)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        selectedPinboardID == nil ? .copy : .move
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        canDragItemsAt indexPaths: Set<IndexPath>,
+        with event: NSEvent
+    ) -> Bool {
+        guard indexPaths.count == 1,
+              let indexPath = indexPaths.first,
+              visibleEntries.indices.contains(indexPath.item) else { return false }
+        if selectedPinboardID != nil {
+            return query.isEmpty && typeFilter == .all
+        }
+        return true
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        pasteboardWriterForItemAt indexPath: IndexPath
+    ) -> NSPasteboardWriting? {
+        guard visibleEntries.indices.contains(indexPath.item) else { return nil }
+        return PinboardDragDescriptor(
+            entryID: visibleEntries[indexPath.item].id,
+            sourcePinboardID: selectedPinboardID
+        ).pasteboardItem()
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        validateDrop draggingInfo: NSDraggingInfo,
+        proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
+        dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>
+    ) -> NSDragOperation {
+        guard query.isEmpty,
+              typeFilter == .all,
+              let boardID = selectedPinboardID,
+              let descriptor = PinboardDragDescriptor.read(from: draggingInfo.draggingPasteboard),
+              descriptor.sourcePinboardID == boardID else { return [] }
+        proposedDropOperation.pointee = .before
+        return .move
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        acceptDrop draggingInfo: NSDraggingInfo,
+        indexPath: IndexPath,
+        dropOperation: NSCollectionView.DropOperation
+    ) -> Bool {
+        guard query.isEmpty,
+              typeFilter == .all,
+              let boardID = selectedPinboardID,
+              let descriptor = PinboardDragDescriptor.read(from: draggingInfo.draggingPasteboard),
+              descriptor.sourcePinboardID == boardID else { return false }
+        onMovePinboardEntry?(descriptor.entryID, boardID, indexPath.item)
+        return true
     }
 
     func collectionView(

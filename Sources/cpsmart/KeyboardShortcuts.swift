@@ -10,6 +10,7 @@ enum ShortcutActionID: String, CaseIterable, Codable {
     case pasteSelection
     case toggleQuickLook
     case togglePin
+    case addToPinboard
     case deleteSelection
     case filterAll
     case filterText
@@ -34,6 +35,7 @@ enum ShortcutActionID: String, CaseIterable, Codable {
         case .pasteSelection: return "粘贴所选内容"
         case .toggleQuickLook: return "Quick Look 预览"
         case .togglePin: return "置顶或取消置顶"
+        case .addToPinboard: return "收藏到收藏板"
         case .deleteSelection: return "删除所选记录"
         case .filterAll: return "筛选：全部"
         case .filterText: return "筛选：文本"
@@ -47,7 +49,8 @@ enum ShortcutActionID: String, CaseIterable, Codable {
         switch self {
         case .toggleHistory: return .global
         case .selectPrevious, .selectNext, .toggleSearchFocus: return .browsing
-        case .pasteSelection, .toggleQuickLook, .togglePin, .deleteSelection: return .actions
+        case .pasteSelection, .toggleQuickLook, .togglePin, .addToPinboard,
+             .deleteSelection: return .actions
         case .filterAll, .filterText, .filterImage, .filterFiles: return .filters
         case .clearSearchOrClose: return .window
         }
@@ -220,6 +223,7 @@ enum ShortcutDefaults {
         ],
         .toggleQuickLook: [ShortcutGesture(keyCode: UInt16(kVK_Space))],
         .togglePin: [ShortcutGesture(keyCode: UInt16(kVK_ANSI_P), modifiers: [.command])],
+        .addToPinboard: [ShortcutGesture(keyCode: UInt16(kVK_ANSI_D), modifiers: [.command])],
         .deleteSelection: [
             ShortcutGesture(keyCode: UInt16(kVK_Delete), modifiers: [.command]),
             ShortcutGesture(keyCode: UInt16(kVK_ForwardDelete), modifiers: [.command])
@@ -550,14 +554,14 @@ struct ShortcutMatcher {
             actions = ShortcutActionID.localActions
         case .searching:
             actions = [
-                .toggleSearchFocus, .pasteSelection, .toggleQuickLook, .togglePin,
+                .toggleSearchFocus, .pasteSelection, .toggleQuickLook, .togglePin, .addToPinboard,
                 .deleteSelection, .filterAll, .filterText, .filterImage, .filterFiles,
                 .clearSearchOrClose
             ]
         case .composingSearchText:
             guard gesture.modifiers.contains(.command) else { return nil }
             actions = [
-                .toggleSearchFocus, .pasteSelection, .toggleQuickLook, .togglePin,
+                .toggleSearchFocus, .pasteSelection, .toggleQuickLook, .togglePin, .addToPinboard,
                 .deleteSelection, .filterAll, .filterText, .filterImage, .filterFiles,
                 .clearSearchOrClose
             ]
@@ -567,7 +571,8 @@ struct ShortcutMatcher {
         let action = store.action(matching: gesture, among: actions)
         if context == .searching,
            let action,
-           [.togglePin, .deleteSelection, .filterAll, .filterText, .filterImage, .filterFiles]
+           [.togglePin, .addToPinboard, .deleteSelection, .filterAll, .filterText,
+            .filterImage, .filterFiles]
             .contains(action),
            !gesture.modifiers.contains(.command) {
             // 搜索框中保留无修饰键的编辑和光标行为。此类自定义键仍可在浏览态使用。

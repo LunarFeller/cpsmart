@@ -100,6 +100,28 @@ enum DemoData {
         ]
     }
 
+    static func makePinboards() -> [Pinboard] {
+        [
+            Pinboard(
+                name: "常用命令",
+                color: .red,
+                entries: [
+                    ClipboardEntry(payload: .text("git status --short --branch")),
+                    ClipboardEntry(payload: .text("swift build && bash Scripts/run_tests.sh")),
+                    ClipboardEntry(payload: .text("curl -fsSL https://example.com/install.sh | sh"))
+                ]
+            ),
+            Pinboard(
+                name: "常用回复",
+                color: .blue,
+                entries: [
+                    ClipboardEntry(payload: .text("收到，我确认后尽快回复你。")),
+                    ClipboardEntry(payload: .text("麻烦补充一下复现步骤和系统版本，谢谢。"))
+                ]
+            )
+        ]
+    }
+
     private static func gradientImage(colors: [NSColor], size: NSSize, seed: Int) -> Data {
         let image = NSImage(size: size)
         image.lockFocus()

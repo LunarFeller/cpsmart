@@ -52,3 +52,46 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
         self.isPinned = isPinned
     }
 }
+
+enum PinboardColor: String, Codable, CaseIterable {
+    case red
+    case orange
+    case yellow
+    case green
+    case blue
+    case purple
+    case pink
+    case gray
+
+    var displayName: String {
+        switch self {
+        case .red: return "红色"
+        case .orange: return "橙色"
+        case .yellow: return "黄色"
+        case .green: return "绿色"
+        case .blue: return "蓝色"
+        case .purple: return "紫色"
+        case .pink: return "粉色"
+        case .gray: return "灰色"
+        }
+    }
+}
+
+struct Pinboard: Codable, Equatable, Identifiable {
+    let id: UUID
+    var name: String
+    var color: PinboardColor
+    var entries: [ClipboardEntry]
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        color: PinboardColor,
+        entries: [ClipboardEntry] = []
+    ) {
+        self.id = id
+        self.name = name
+        self.color = color
+        self.entries = entries
+    }
+}

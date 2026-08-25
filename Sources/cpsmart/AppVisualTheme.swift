@@ -16,6 +16,19 @@ struct Palette {
     let typeText: NSColor
     let typeImage: NSColor
     let typeFile: NSColor
+
+    func pinboardColor(_ color: PinboardColor) -> NSColor {
+        switch color {
+        case .red: return .systemRed
+        case .orange: return .systemOrange
+        case .yellow: return .systemYellow
+        case .green: return .systemGreen
+        case .blue: return .systemBlue
+        case .purple: return .systemPurple
+        case .pink: return .systemPink
+        case .gray: return .systemGray
+        }
+    }
 }
 
 enum AppVisualTheme {

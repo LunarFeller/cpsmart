@@ -4,6 +4,7 @@ import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = HistoryStore()
+    private let pinboardStore = PinboardStore()
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let shortcutStore = ShortcutStore()
@@ -20,6 +21,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pauseMenuItem: NSMenuItem!
     private var loginMenuItem: NSMenuItem!
     private var appearanceMenuItem: NSMenuItem!
+
+    #if DEBUG
+    private var demoPinboardStore: PinboardStore?
+    private var demoPinboardFileURL: URL?
+    #endif
+
+    private var activePinboardStore: PinboardStore {
+        #if DEBUG
+        if let demoPinboardStore { return demoPinboardStore }
+        #endif
+        return pinboardStore
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -63,11 +76,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 guard !shouldShowShortcutSettings else { return }
-                self.historyWindow.show(entries: DemoData.makeEntries())
+                let demoPinboardFileURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "cpsmart-demo-pinboards-\(ProcessInfo.processInfo.processIdentifier).json"
+                    )
+                try? FileManager.default.removeItem(at: demoPinboardFileURL)
+                self.demoPinboardFileURL = demoPinboardFileURL
+                self.demoPinboardStore = PinboardStore(
+                    fileURL: demoPinboardFileURL,
+                    initialBoards: DemoData.makePinboards()
+                )
+                self.historyWindow.show(
+                    entries: DemoData.makeEntries(),
+                    pinboards: self.activePinboardStore.boards
+                )
                 if CommandLine.arguments.contains("--demo-light") {
                     self.historyWindow.applyAppearanceMode(.light)
                 } else if CommandLine.arguments.contains("--demo-dark") {
                     self.historyWindow.applyAppearanceMode(.dark)
+                }
+                if let pinboardIndex = CommandLine.arguments.firstIndex(of: "--demo-pinboard"),
+                   CommandLine.arguments.indices.contains(pinboardIndex + 1),
+                   let index = Int(CommandLine.arguments[pinboardIndex + 1]) {
+                    self.historyWindow.applyDemoPinboard(at: index)
                 }
                 if let queryIndex = CommandLine.arguments.firstIndex(of: "--demo-query"),
                    CommandLine.arguments.indices.contains(queryIndex + 1) {
@@ -81,6 +112,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.historyWindow.showDemoPreview(at: index)
                     }
                 }
+                if let snapshotIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot"),
+                   CommandLine.arguments.indices.contains(snapshotIndex + 1) {
+                    let snapshotURL = URL(
+                        fileURLWithPath: CommandLine.arguments[snapshotIndex + 1]
+                    )
+                    var snapshotDelay = 0.6
+                    if let delayIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot-delay"),
+                       CommandLine.arguments.indices.contains(delayIndex + 1),
+                       let configuredDelay = Double(CommandLine.arguments[delayIndex + 1]) {
+                        snapshotDelay = max(0, configuredDelay)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + snapshotDelay) { [weak self] in
+                        _ = self?.historyWindow.writeDemoSnapshot(to: snapshotURL)
+                    }
+                }
             }
         }
         #endif
@@ -88,6 +134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        #if DEBUG
+        if let demoPinboardFileURL {
+            try? FileManager.default.removeItem(at: demoPinboardFileURL)
+        }
+        #endif
     }
 
     private func configureApplicationIcon() {
@@ -130,6 +181,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.store.togglePin(id: entry.id)
             self.historyWindow.refresh(entries: self.store.entries)
+        }
+        historyWindow.onCreatePinboard = { [weak self] name, color in
+            guard let self else { return nil }
+            let store = self.activePinboardStore
+            let board = store.create(name: name, color: color)
+            self.historyWindow.refresh(pinboards: store.boards)
+            return board
+        }
+        historyWindow.onRenamePinboard = { [weak self] id, name in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.rename(id: id, to: name)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onSetPinboardColor = { [weak self] id, color in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.setColor(id: id, color: color)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onDeletePinboard = { [weak self] id in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.removeBoard(id: id)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onAddToPinboard = { [weak self] entry, boardID in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.add(entry, to: boardID)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onRemoveFromPinboard = { [weak self] entry, boardID in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.removeEntry(id: entry.id, from: boardID)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onMovePinboardEntry = { [weak self] entryID, boardID, insertionIndex in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.moveEntry(
+                id: entryID,
+                toInsertionIndex: insertionIndex,
+                in: boardID
+            )
+            self.historyWindow.refresh(pinboards: store.boards)
         }
     }
 
@@ -270,7 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func showHistory() {
-        historyWindow.show(entries: store.entries)
+        historyWindow.show(entries: store.entries, pinboards: activePinboardStore.boards)
     }
 
     @objc private func showHistoryFromMenu() {
