@@ -20,7 +20,11 @@ CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" swiftc \
     -sdk "$SDK_PATH" \
     -target "$(uname -m)-apple-macosx13.0" \
     "$PROJECT_DIR/Sources/cpsmart/Models.swift" \
+    "$PROJECT_DIR/Sources/cpsmart/IgnoredApps.swift" \
     "$PROJECT_DIR/Sources/cpsmart/HistoryStore.swift" \
+    "$PROJECT_DIR/Sources/cpsmart/ClipboardMonitor.swift" \
+    "$PROJECT_DIR/Sources/cpsmart/SearchFilter.swift" \
+    "$PROJECT_DIR/Sources/cpsmart/ThumbnailProvider.swift" \
     "$PROJECT_DIR/Scripts/core_tests.swift" \
     -o "$BUILD_DIR/cpsmartCoreTests"
 
