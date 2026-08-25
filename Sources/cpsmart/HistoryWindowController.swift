@@ -178,8 +178,7 @@ private final class KeyboardCollectionView: NSCollectionView {
 }
 
 private final class ClickableCardView: NSView {
-    var onClick: (() -> Void)?
-    var onDoubleClick: (() -> Void)?
+    var onClick: ((Int) -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
@@ -208,28 +207,25 @@ private final class ClickableCardView: NSView {
         onHoverChanged?(false)
     }
 
-    /// 浮窗失去激活状态时，第一次点击也要直接选择卡片，不能只用于激活窗口。
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
     }
 
-    /// 让整张卡片（包括文字、图片和底部信息）都使用同一个点击行为。
-    /// 否则 NSTextField 等子视图会截获鼠标事件，点击内容时无法更新选中态。
+    /// AppKit 传给 hitTest 的点属于父视图坐标系，必须先转换成卡片本地坐标。
+    /// 直接与 bounds 比较会让横向滚动后的卡片命中区域整体错位。
     override func hitTest(_ point: NSPoint) -> NSView? {
-        bounds.contains(point) ? self : nil
+        guard let superview else { return nil }
+        let localPoint = convert(point, from: superview)
+        return bounds.contains(localPoint) ? self : nil
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
-        if event.clickCount >= 2 {
-            onDoubleClick?()
-        } else {
-            onClick?()
-        }
+        onClick?(event.clickCount)
     }
 
     override func accessibilityPerformPress() -> Bool {
-        onClick?()
+        onClick?(1)
         return true
     }
 }
@@ -237,11 +233,8 @@ private final class ClickableCardView: NSView {
 // MARK: - 卡片
 
 private final class HistoryCollectionItem: NSCollectionViewItem {
-    var onClick: (() -> Void)? {
+    var onClick: ((Int) -> Void)? {
         didSet { cardView.onClick = onClick }
-    }
-    var onDoubleClick: (() -> Void)? {
-        didSet { cardView.onDoubleClick = onDoubleClick }
     }
 
     private let cardView = ClickableCardView()
@@ -1484,15 +1477,13 @@ final class HistoryWindowController: NSWindowController,
             thumbnails: thumbnailProvider,
             palette: palette
         )
-        item.onClick = { [weak self] in
+        item.onClick = { [weak self] clickCount in
             guard let self else { return }
             self.focusCollectionView()
             self.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: true)
-        }
-        item.onDoubleClick = { [weak self] in
-            guard let self else { return }
-            self.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: false)
-            self.confirmAndPaste()
+            if clickCount >= 2 {
+                self.confirmAndPaste()
+            }
         }
         return item
     }
