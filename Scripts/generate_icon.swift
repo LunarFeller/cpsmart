@@ -6,6 +6,17 @@ guard CommandLine.arguments.count == 2 else {
     exit(2)
 }
 
+let scriptDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let projectDirectory = scriptDirectory.deletingLastPathComponent()
+let sourceURL = projectDirectory
+    .appendingPathComponent("Resources", isDirectory: true)
+    .appendingPathComponent("CPSmartAppIconSource.png")
+
+guard let sourceImage = NSImage(contentsOf: sourceURL) else {
+    fputs("Unable to load app icon source at \(sourceURL.path)\n", stderr)
+    exit(1)
+}
+
 let outputDirectory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 try FileManager.default.createDirectory(
     at: outputDirectory,
@@ -48,60 +59,49 @@ func makeIcon(size: Int) throws -> Data {
 
     let context = graphicsContext.cgContext
     context.setShouldAntialias(true)
+    context.interpolationQuality = .high
     context.clear(CGRect(x: 0, y: 0, width: canvas, height: canvas))
 
-    let inset = canvas * 0.05
-    let backgroundRect = NSRect(
-        x: inset,
-        y: inset,
-        width: canvas - inset * 2,
-        height: canvas - inset * 2
+    // The generated artwork includes a white preview canvas. Clip it back to the
+    // macOS icon tile so Finder and the Dock see transparent corners rather than
+    // an opaque white square.
+    let tileInset = canvas * 0.075
+    let tileRect = CGRect(
+        x: tileInset,
+        y: tileInset,
+        width: canvas - tileInset * 2,
+        height: canvas - tileInset * 2
     )
-    let background = NSBezierPath(
-        roundedRect: backgroundRect,
-        xRadius: canvas * 0.22,
-        yRadius: canvas * 0.22
+    let tilePath = CGPath(
+        roundedRect: tileRect,
+        cornerWidth: canvas * 0.205,
+        cornerHeight: canvas * 0.205,
+        transform: nil
     )
-    background.addClip()
-    let gradient = NSGradient(colors: [
-        NSColor(calibratedRed: 0.18, green: 0.39, blue: 0.98, alpha: 1),
-        NSColor(calibratedRed: 0.46, green: 0.20, blue: 0.91, alpha: 1)
-    ])!
-    gradient.draw(in: background, angle: -55)
 
-    func drawSheet(offsetX: CGFloat, offsetY: CGFloat, alpha: CGFloat) {
-        let rect = NSRect(
-            x: canvas * (0.25 + offsetX),
-            y: canvas * (0.22 + offsetY),
-            width: canvas * 0.50,
-            height: canvas * 0.58
-        )
-        let sheet = NSBezierPath(
-            roundedRect: rect,
-            xRadius: canvas * 0.055,
-            yRadius: canvas * 0.055
-        )
-        NSColor.white.withAlphaComponent(alpha).setFill()
-        sheet.fill()
-    }
+    context.saveGState()
+    context.setShadow(
+        offset: CGSize(width: 0, height: -canvas * 0.018),
+        blur: canvas * 0.025,
+        color: NSColor.black.withAlphaComponent(0.24).cgColor
+    )
+    context.addPath(tilePath)
+    context.setFillColor(NSColor.white.cgColor)
+    context.fillPath()
+    context.restoreGState()
 
-    drawSheet(offsetX: -0.055, offsetY: 0.06, alpha: 0.38)
-    drawSheet(offsetX: 0, offsetY: 0, alpha: 0.96)
-
-    NSColor(calibratedRed: 0.28, green: 0.28, blue: 0.45, alpha: 0.65).setFill()
-    for index in 0..<3 {
-        let bar = NSBezierPath(
-            roundedRect: NSRect(
-                x: canvas * 0.33,
-                y: canvas * (0.35 + CGFloat(index) * 0.115),
-                width: canvas * (index == 0 ? 0.25 : 0.34),
-                height: max(canvas * 0.045, 1)
-            ),
-            xRadius: canvas * 0.022,
-            yRadius: canvas * 0.022
-        )
-        bar.fill()
-    }
+    context.saveGState()
+    context.addPath(tilePath)
+    context.clip()
+    sourceImage.draw(
+        in: NSRect(x: 0, y: 0, width: canvas, height: canvas),
+        from: NSRect(origin: .zero, size: sourceImage.size),
+        operation: .copy,
+        fraction: 1,
+        respectFlipped: false,
+        hints: [.interpolation: NSImageInterpolation.high]
+    )
+    context.restoreGState()
 
     guard let png = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "cpsmartIcon", code: 2)
