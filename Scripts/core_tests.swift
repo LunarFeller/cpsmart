@@ -31,7 +31,101 @@ struct CoreTests {
         try testPinnedFieldLegacyCompatibility(in: temporaryDirectory)
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
+        try testAdaptivePreviewSizing()
         print("All cpsmart core tests passed.")
+    }
+
+    private static func testAdaptivePreviewSizing() throws {
+        // 负坐标副屏不应改变尺寸计算；算法只能依赖相对边界。
+        let primaryVisible = NSRect(x: 0, y: 0, width: 1440, height: 860)
+        let secondaryVisible = NSRect(x: -1440, y: 120, width: 1440, height: 860)
+        let primarySource = NSRect(x: 120, y: 130, width: 204, height: 150)
+        let secondarySource = NSRect(x: -1320, y: 250, width: 204, height: 150)
+        let primaryLimits = AdaptivePreviewSizing.limits(
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        let secondaryLimits = AdaptivePreviewSizing.limits(
+            visibleFrame: secondaryVisible,
+            sourceFrame: secondarySource
+        )
+        try require(
+            primaryLimits.maximumWidth == secondaryLimits.maximumWidth
+                && primaryLimits.maximumHeight == secondaryLimits.maximumHeight,
+            "adaptive preview sizing depended on the screen origin"
+        )
+
+        let font = NSFont.systemFont(ofSize: 13.5)
+        let shortText = AdaptivePreviewSizing.textSize(
+            for: "一小段文本",
+            font: font,
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        let longText = AdaptivePreviewSizing.textSize(
+            for: Array(repeating: "这是一段需要滚动显示的长文本。", count: 180).joined(separator: "\n"),
+            font: font,
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            shortText.width < longText.width && shortText.height < longText.height,
+            "long text did not receive a larger preview than short text"
+        )
+        try require(
+            longText.width <= primaryLimits.maximumWidth
+                && longText.height <= primaryLimits.maximumHeight,
+            "long text preview exceeded the screen-derived limits"
+        )
+
+        let naturalImage = AdaptivePreviewSizing.imageSize(
+            pixelSize: NSSize(width: 490, height: 159),
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            naturalImage.width == 514 && naturalImage.height == 231,
+            "small image was unexpectedly enlarged or distorted"
+        )
+
+        let largeImage = AdaptivePreviewSizing.imageSize(
+            pixelSize: NSSize(width: 6000, height: 4000),
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            largeImage.width <= primaryLimits.maximumWidth
+                && largeImage.height <= primaryLimits.maximumHeight,
+            "large image preview exceeded the screen-derived limits"
+        )
+
+        let smallScreen = NSRect(x: 0, y: 0, width: 360, height: 420)
+        let smallScreenSource = NSRect(x: 20, y: 40, width: 200, height: 120)
+        let constrained = AdaptivePreviewSizing.textSize(
+            for: String(repeating: "内容 ", count: 1_000),
+            font: font,
+            visibleFrame: smallScreen,
+            sourceFrame: smallScreenSource
+        )
+        try require(
+            constrained.width <= smallScreen.width - 48
+                && constrained.height <= smallScreen.height - 48,
+            "adaptive preview did not respect a small screen's safe bounds"
+        )
+
+        let secondaryQuickLookFrame = AdaptivePreviewSizing.centeredQuickLookFrame(
+            panelSize: NSSize(width: 816, height: 816),
+            visibleFrame: secondaryVisible
+        )
+        try require(
+            secondaryVisible.insetBy(dx: 24, dy: 24).contains(secondaryQuickLookFrame),
+            "Quick Look frame escaped the negative-origin secondary display"
+        )
+        try require(
+            secondaryQuickLookFrame.midX == secondaryVisible.midX
+                && secondaryQuickLookFrame.midY == secondaryVisible.midY,
+            "Quick Look frame was not centered on the selected display"
+        )
     }
 
     private static func testDeduplication(in directory: URL) throws {

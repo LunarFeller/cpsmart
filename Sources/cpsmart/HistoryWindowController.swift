@@ -1,6 +1,15 @@
 import AppKit
 import Quartz
 
+private extension NSRect {
+    func approximatelyEquals(_ other: NSRect, tolerance: CGFloat = 0.5) -> Bool {
+        abs(minX - other.minX) <= tolerance
+            && abs(minY - other.minY) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
+    }
+}
+
 // MARK: - 外观模式与调色板
 
 /// 外观模式：跟随系统 / 浅色 / 深色。存 UserDefaults，从菜单栏「外观」切换。
@@ -116,7 +125,7 @@ private enum Theme {
 
 // MARK: - 图片元信息（轻量读取，不解码像素；缩略图本体见 ThumbnailProvider.swift）
 
-private enum ImageMetadata {
+enum ImageMetadata {
     /// 只读图片尺寸，不解码像素，可在主线程调用。
     static func pixelSize(of data: Data) -> NSSize? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -593,6 +602,7 @@ final class HistoryWindowController: NSWindowController,
     private let collectionView = KeyboardCollectionView()
     private let flowLayout = NSCollectionViewFlowLayout()
     private let thumbnailProvider = ThumbnailProvider()
+    private let adaptivePreviewController = AdaptivePreviewController()
     private let searchField = NSSearchField()
     private var filterControl: NSSegmentedControl!
     private let titleLabel = NSTextField(labelWithString: "cpsmart")
@@ -615,6 +625,7 @@ final class HistoryWindowController: NSWindowController,
     private var keyboardMonitor: Any?
     private var mouseMonitor: Any?
     private var quickLookPreviewURL: URL?
+    private var isPositioningQuickLookPanel = false
     private var activationObserver: NSObjectProtocol?
     private var systemThemeObserver: NSObjectProtocol?
     private var isDismissing = false
@@ -952,7 +963,16 @@ final class HistoryWindowController: NSWindowController,
     }
 
     func windowDidResize(_ notification: Notification) {
+        if let panel = notification.object as? QLPreviewPanel {
+            positionQuickLookPanel(panel)
+            return
+        }
         updateContentInsets()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let panel = notification.object as? QLPreviewPanel else { return }
+        positionQuickLookPanel(panel)
     }
 
     // MARK: 过滤
@@ -992,6 +1012,11 @@ final class HistoryWindowController: NSWindowController,
             chooseEntry(at: index)
         } else {
             statusLabel.stringValue = ""
+        }
+        if visibleEntries.isEmpty {
+            closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+        } else {
+            refreshAdaptivePreviewIfNeeded()
         }
     }
 
@@ -1053,17 +1078,80 @@ final class HistoryWindowController: NSWindowController,
         window?.makeFirstResponder(searchField)
         updateHintLabel()
     }
-    // MARK: QuickLook 预览
+    // MARK: 自适应预览与 Quick Look
+
+    private var isAdaptivePreviewVisible: Bool {
+        adaptivePreviewController.isVisible
+    }
 
     private var isQuickLookVisible: Bool {
         QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared()?.isVisible == true
     }
 
-    private func toggleQuickLook() {
+    private func togglePreview() {
+        if isAdaptivePreviewVisible {
+            closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: true)
+            return
+        }
         if isQuickLookVisible {
             closeQuickLookIfNeeded(restoreBrowsingFocus: true)
             return
         }
+
+        if showAdaptivePreviewIfSupported() {
+            return
+        }
+        showQuickLook()
+    }
+
+    private func showAdaptivePreviewIfSupported() -> Bool {
+        guard visibleEntries.indices.contains(selectedIndex) else { return false }
+        collectionView.layoutSubtreeIfNeeded()
+        guard let itemView = collectionView.item(at: selectedIndex)?.view else { return false }
+
+        // 快速连续切换时也只允许一种预览存在。
+        if isQuickLookVisible {
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        }
+
+        return adaptivePreviewController.show(
+            entry: visibleEntries[selectedIndex],
+            relativeTo: itemView,
+            palette: palette
+        ) { [weak self] in
+            guard let self else { return }
+            self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            self.showQuickLook()
+        }
+    }
+
+    private func refreshAdaptivePreviewIfNeeded() {
+        guard isAdaptivePreviewVisible else { return }
+        // scrollToItems 的布局在当前事件尾部才稳定；等布局完成后再换锚点。
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.isAdaptivePreviewVisible else { return }
+            if !self.showAdaptivePreviewIfSupported() {
+                // 文件仍走完整 Quick Look；从文本/图片切到文件时平滑切换预览模式。
+                self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+                self.showQuickLook()
+            }
+        }
+    }
+
+    private func closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: Bool) {
+        if isAdaptivePreviewVisible {
+            adaptivePreviewController.close()
+        }
+        if restoreBrowsingFocus {
+            window?.makeKeyAndOrderFront(nil)
+            focusCollectionView()
+        }
+    }
+
+    private func showQuickLook() {
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
         guard prepareQuickLookPreview(), let panel = QLPreviewPanel.shared() else {
             NSSound.beep()
             return
@@ -1071,7 +1159,30 @@ final class HistoryWindowController: NSWindowController,
         panel.dataSource = self
         panel.delegate = self
         panel.reloadData()
+        positionQuickLookPanel(panel)
         panel.makeKeyAndOrderFront(nil)
+        // Quick Look 内容异步载入后可能重算窗口尺寸，再约束一次目标屏幕。
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let self, let panel, panel.isVisible else { return }
+            self.positionQuickLookPanel(panel)
+        }
+    }
+
+    private func positionQuickLookPanel(_ panel: QLPreviewPanel) {
+        guard !isPositioningQuickLookPanel else { return }
+        collectionView.layoutSubtreeIfNeeded()
+        let selectedItemScreen = collectionView.item(at: selectedIndex)?.view.window?.screen
+        guard let screen = selectedItemScreen ?? window?.screen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let targetFrame = AdaptivePreviewSizing.centeredQuickLookFrame(
+            panelSize: panel.frame.size,
+            visibleFrame: visibleFrame
+        )
+        guard !panel.frame.approximatelyEquals(targetFrame) else { return }
+        isPositioningQuickLookPanel = true
+        panel.setFrame(targetFrame, display: false)
+        isPositioningQuickLookPanel = false
     }
 
     private func closeQuickLookIfNeeded(restoreBrowsingFocus: Bool) {
@@ -1180,6 +1291,7 @@ final class HistoryWindowController: NSWindowController,
         collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
         suppressSelectionCallback = false
         chooseEntry(at: index)
+        refreshAdaptivePreviewIfNeeded()
     }
 
     private func chooseEntry(at index: Int) {
@@ -1262,6 +1374,13 @@ final class HistoryWindowController: NSWindowController,
         refilter(fallbackIndex: 0)
         focusSearchField()
     }
+
+    /// 开发用：直接选中演示记录并打开预览，便于自动截图检查不同内容尺寸。
+    func showDemoPreview(at index: Int) {
+        guard visibleEntries.indices.contains(index) else { return }
+        selectAndChoose(index: index, notifyWhenUnchanged: true)
+        togglePreview()
+    }
     #endif
 
     func controlTextDidChange(_ notification: Notification) {
@@ -1285,6 +1404,7 @@ final class HistoryWindowController: NSWindowController,
         guard let window, window.isVisible, !isDismissing else { return }
         isDismissing = true
         removeKeyboardMonitor()
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
         closeQuickLookIfNeeded(restoreBrowsingFocus: false)
         thumbnailProvider.cancelAll()
         NSAnimationContext.runAnimationGroup({ context in
@@ -1350,6 +1470,22 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
+        if isAdaptivePreviewVisible {
+            switch event.keyCode {
+            case 49, 53:
+                if !event.isARepeat {
+                    closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: true)
+                }
+                return true
+            case 123, 124:
+                moveSelection(by: event.keyCode == 123 ? -1 : 1)
+                return true
+            default:
+                // 允许 ⌘C 等文本选择相关快捷键继续交给只读预览文本。
+                return false
+            }
+        }
+
         if isQuickLookVisible {
             switch event.keyCode {
             case 49, 53:
@@ -1360,7 +1496,10 @@ final class HistoryWindowController: NSWindowController,
                 let offset = event.keyCode == 123 ? -1 : 1
                 moveSelection(by: offset)
                 if prepareQuickLookPreview() {
-                    QLPreviewPanel.shared()?.reloadData()
+                    if let panel = QLPreviewPanel.shared() {
+                        panel.reloadData()
+                        positionQuickLookPanel(panel)
+                    }
                 }
             default:
                 break
@@ -1403,7 +1542,7 @@ final class HistoryWindowController: NSWindowController,
             confirmAndPaste()
         case 49:
             if !event.isARepeat {
-                toggleQuickLook()
+                togglePreview()
             }
         case 51, 117:
             // 删除统一走 ⌘⌫（同 Finder）：搜索时退格要留给文本编辑，
@@ -1495,5 +1634,6 @@ final class HistoryWindowController: NSWindowController,
         guard !suppressSelectionCallback, let indexPath = indexPaths.first else { return }
         selectedIndex = indexPath.item
         chooseEntry(at: indexPath.item)
+        refreshAdaptivePreviewIfNeeded()
     }
 }

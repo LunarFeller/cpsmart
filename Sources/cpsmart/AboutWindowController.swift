@@ -194,7 +194,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         let rows: [(key: String, detail: String)] = [
             ("⇧⌘V", "打开或关闭剪贴板历史"),
             ("←  →", "在卡片之间移动选择"),
-            ("Space", "Quick Look 预览所选内容"),
+            ("Space", "自适应预览所选内容"),
             ("Tab", "在卡片与搜索框之间切换"),
             ("回车", "粘贴所选内容到原应用"),
             ("⌘P", "置顶或取消置顶"),

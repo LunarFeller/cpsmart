@@ -81,7 +81,7 @@ enum DemoData {
                     - [x] 搜索过滤
                     - [x] 图片缩略图
                     - [x] 来源应用图标
-                    - [x] QuickLook 预览
+                    - [x] 自适应预览
                     """),
                 createdAt: now.addingTimeInterval(-3 * 3600),
                 sourceAppName: "备忘录",

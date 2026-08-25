@@ -65,6 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    CommandLine.arguments.indices.contains(queryIndex + 1) {
                     self.historyWindow.applyDemoQuery(CommandLine.arguments[queryIndex + 1])
                 }
+                if let previewIndex = CommandLine.arguments.firstIndex(of: "--demo-preview-index"),
+                   CommandLine.arguments.indices.contains(previewIndex + 1),
+                   let index = Int(CommandLine.arguments[previewIndex + 1]) {
+                    // 等集合视图完成首轮布局，确保选中卡片已经有可用于锚定的 window。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.historyWindow.showDemoPreview(at: index)
+                    }
+                }
             }
         }
         #endif
