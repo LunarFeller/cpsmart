@@ -5,18 +5,49 @@ final class HistoryStore {
 
     let maximumEntryCount: Int
     let maximumStorageBytes: Int
+    let keepDays: Int
     private let fileURL: URL
     private let fileManager: FileManager
+    private let now: () -> Date
 
     init(
         fileURL: URL? = nil,
-        maximumEntryCount: Int = 200,
-        maximumStorageBytes: Int = 25 * 1_024 * 1_024,
+        maximumEntryCount: Int? = nil,
+        maximumStorageBytes: Int? = nil,
+        keepDays: Int? = nil,
+        userDefaults: UserDefaults = .standard,
+        now: @escaping () -> Date = Date.init,
         fileManager: FileManager = .default
     ) {
-        self.maximumEntryCount = maximumEntryCount
-        self.maximumStorageBytes = maximumStorageBytes
+        self.maximumEntryCount = max(
+            0,
+            maximumEntryCount ?? Self.integerValue(
+                forKey: "maximumEntryCount",
+                defaultValue: 200,
+                userDefaults: userDefaults
+            )
+        )
+        if let maximumStorageBytes {
+            self.maximumStorageBytes = max(0, maximumStorageBytes)
+        } else {
+            let configuredMB = Self.integerValue(
+                forKey: "maximumStorageMB",
+                defaultValue: 25,
+                userDefaults: userDefaults
+            )
+            let clampedMB = min(max(0, configuredMB), Int.max / (1_024 * 1_024))
+            self.maximumStorageBytes = clampedMB * 1_024 * 1_024
+        }
+        self.keepDays = max(
+            0,
+            keepDays ?? Self.integerValue(
+                forKey: "keepDays",
+                defaultValue: 0,
+                userDefaults: userDefaults
+            )
+        )
         self.fileManager = fileManager
+        self.now = now
         let resolvedFileURL = fileURL ?? Self.defaultFileURL(fileManager: fileManager)
         self.fileURL = resolvedFileURL
         if fileURL == nil {
@@ -32,12 +63,14 @@ final class HistoryStore {
         sourceAppBundleID: String? = nil,
         at date: Date = Date()
     ) -> ClipboardEntry {
+        let shouldRemainPinned = entries.first(where: { $0.payload == payload })?.isPinned == true
         entries.removeAll { $0.payload == payload }
         let entry = ClipboardEntry(
             payload: payload,
             createdAt: date,
             sourceAppName: sourceAppName,
-            sourceAppBundleID: sourceAppBundleID
+            sourceAppBundleID: sourceAppBundleID,
+            isPinned: shouldRemainPinned ? true : nil
         )
         entries.insert(entry, at: 0)
         trimToLimits()
@@ -51,12 +84,30 @@ final class HistoryStore {
             ClipboardEntry(
                 id: entry.id,
                 payload: entry.payload,
-                createdAt: Date(),
+                createdAt: now(),
                 sourceAppName: entry.sourceAppName,
-                sourceAppBundleID: entry.sourceAppBundleID
+                sourceAppBundleID: entry.sourceAppBundleID,
+                isPinned: entry.isPinned
             ),
             at: 0
         )
+        trimToLimits()
+        save()
+    }
+
+    func togglePin(id: UUID) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        let entry = entries[index]
+        entries[index] = ClipboardEntry(
+            id: entry.id,
+            payload: entry.payload,
+            createdAt: entry.createdAt,
+            sourceAppName: entry.sourceAppName,
+            sourceAppBundleID: entry.sourceAppBundleID,
+            isPinned: entry.isPinned == true ? false : true
+        )
+        sortEntries()
+        trimToLimits()
         save()
     }
 
@@ -66,19 +117,48 @@ final class HistoryStore {
     }
 
     func clear() {
+        entries.removeAll { $0.isPinned != true }
+        save()
+    }
+
+    func clearAll() {
         entries.removeAll()
         save()
     }
 
     private func trimToLimits() {
-        if entries.count > maximumEntryCount {
-            entries.removeLast(entries.count - maximumEntryCount)
+        sortEntries()
+
+        if keepDays > 0,
+           let cutoff = Calendar.current.date(
+               byAdding: .day,
+               value: -keepDays,
+               to: now()
+           ) {
+            entries.removeAll { $0.isPinned != true && $0.createdAt < cutoff }
+        }
+
+        while entries.count > maximumEntryCount,
+              let removalIndex = entries.lastIndex(where: { $0.isPinned != true }) {
+            entries.remove(at: removalIndex)
         }
 
         var total = entries.reduce(0) { $0 + $1.payload.estimatedSize }
-        while total > maximumStorageBytes, let last = entries.last {
-            total -= last.payload.estimatedSize
-            entries.removeLast()
+        while total > maximumStorageBytes,
+              let removalIndex = entries.lastIndex(where: { $0.isPinned != true }) {
+            total -= entries[removalIndex].payload.estimatedSize
+            entries.remove(at: removalIndex)
+        }
+    }
+
+    private func sortEntries() {
+        entries.sort { lhs, rhs in
+            let lhsIsPinned = lhs.isPinned == true
+            let rhsIsPinned = rhs.isPinned == true
+            if lhsIsPinned != rhsIsPinned {
+                return lhsIsPinned
+            }
+            return lhs.createdAt > rhs.createdAt
         }
     }
 
@@ -117,6 +197,15 @@ final class HistoryStore {
         return applicationSupport
             .appendingPathComponent("cpsmart", isDirectory: true)
             .appendingPathComponent("history.json", isDirectory: false)
+    }
+
+    private static func integerValue(
+        forKey key: String,
+        defaultValue: Int,
+        userDefaults: UserDefaults
+    ) -> Int {
+        guard userDefaults.object(forKey: key) != nil else { return defaultValue }
+        return userDefaults.integer(forKey: key)
     }
 
     private static func migrateLegacyHistoryIfNeeded(to destination: URL, fileManager: FileManager) {
