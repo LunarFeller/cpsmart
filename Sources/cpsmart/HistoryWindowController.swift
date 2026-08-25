@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 
 // MARK: - 外观模式与调色板
 
@@ -141,6 +142,7 @@ private final class KeyboardCollectionView: NSCollectionView {
     var onConfirm: (() -> Void)?
     var onDelete: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onBackgroundClick: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -163,6 +165,15 @@ private final class KeyboardCollectionView: NSCollectionView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard indexPathForItem(at: point) != nil else {
+            onBackgroundClick?()
+            return
+        }
+        super.mouseDown(with: event)
     }
 }
 
@@ -552,7 +563,9 @@ final class HistoryWindowController: NSWindowController,
     NSCollectionViewDataSource,
     NSCollectionViewDelegate,
     NSSearchFieldDelegate,
-    NSWindowDelegate
+    NSWindowDelegate,
+    QLPreviewPanelDataSource,
+    QLPreviewPanelDelegate
 {
     var onChoose: ((ClipboardEntry) -> Void)?
     var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
@@ -582,6 +595,8 @@ final class HistoryWindowController: NSWindowController,
     private var lastExternalApplication: NSRunningApplication?
     private var suppressSelectionCallback = false
     private var keyboardMonitor: Any?
+    private var mouseMonitor: Any?
+    private var quickLookPreviewURL: URL?
     private var activationObserver: NSObjectProtocol?
     private var systemThemeObserver: NSObjectProtocol?
     private var isDismissing = false
@@ -632,6 +647,7 @@ final class HistoryWindowController: NSWindowController,
 
     deinit {
         removeKeyboardMonitor()
+        cleanupQuickLookTempFiles()
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
         }
@@ -706,7 +722,8 @@ final class HistoryWindowController: NSWindowController,
         }
         DispatchQueue.main.async { [weak self, weak window] in
             guard let self, let window else { return }
-            window.makeFirstResponder(self.searchField)
+            window.makeFirstResponder(self.collectionView)
+            self.updateHintLabel()
         }
     }
 
@@ -824,6 +841,9 @@ final class HistoryWindowController: NSWindowController,
         collectionView.onDelete = { [weak self] in self?.deleteSelection() }
         collectionView.onEscape = { [weak self] in
             self?.dismiss(restorePreviousApplication: true)
+        }
+        collectionView.onBackgroundClick = { [weak self] in
+            self?.focusCollectionView()
         }
         scrollView.documentView = collectionView
 
@@ -978,17 +998,159 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func updateHintLabel() {
-        hintLabel.stringValue = query.isEmpty
-            ? "← → 选择 · ⏎ 粘贴 · ⌘⌫ 删除 · ⌘1–4 筛选 · Esc 关闭"
-            : "输入继续过滤 · ⏎ 粘贴所选 · Esc 清除搜索"
+        if isSearchFieldFocused, query.contains(where: { !$0.isWhitespace }) {
+            hintLabel.stringValue = "输入筛选 · Tab 返回浏览 · 空格 预览 · ⏎ 粘贴 · Esc 清除搜索"
+        } else {
+            hintLabel.stringValue = "← → 选择 · 空格 预览 · ⏎ 粘贴 · Tab 搜索 · ⌘⌫ 删除 · Esc 关闭"
+        }
     }
 
     // MARK: 选择与动作
 
     private func moveSelection(by offset: Int) {
         guard !visibleEntries.isEmpty else { return }
+        focusCollectionView()
         let newIndex = min(max(selectedIndex + offset, 0), visibleEntries.count - 1)
         selectAndChoose(index: newIndex, notifyWhenUnchanged: true)
+    }
+
+    private var isSearchFieldFocused: Bool {
+        guard let editor = searchField.currentEditor() else { return false }
+        return window?.firstResponder === editor
+    }
+
+    private var isComposingSearchText: Bool {
+        guard isSearchFieldFocused,
+              let editor = searchField.currentEditor() as? NSTextView else { return false }
+        return editor.hasMarkedText()
+    }
+
+    private func focusCollectionView() {
+        window?.makeFirstResponder(collectionView)
+        updateHintLabel()
+    }
+
+    private func focusSearchField() {
+        window?.makeFirstResponder(searchField)
+        updateHintLabel()
+    }
+
+    // MARK: QuickLook 预览
+
+    private var isQuickLookVisible: Bool {
+        QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared()?.isVisible == true
+    }
+
+    private func toggleQuickLook() {
+        if isQuickLookVisible {
+            closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+            return
+        }
+        guard prepareQuickLookPreview(), let panel = QLPreviewPanel.shared() else {
+            NSSound.beep()
+            return
+        }
+        panel.dataSource = self
+        panel.delegate = self
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    private func closeQuickLookIfNeeded(restoreBrowsingFocus: Bool) {
+        if QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() {
+            if panel.isVisible { panel.orderOut(nil) }
+            panel.dataSource = nil
+            panel.delegate = nil
+        }
+        quickLookPreviewURL = nil
+        cleanupQuickLookTempFiles()
+
+        if restoreBrowsingFocus {
+            window?.makeKeyAndOrderFront(nil)
+            focusCollectionView()
+        }
+    }
+
+    private func prepareQuickLookPreview() -> Bool {
+        guard visibleEntries.indices.contains(selectedIndex) else {
+            quickLookPreviewURL = nil
+            return false
+        }
+
+        cleanupQuickLookTempFiles()
+        let entry = visibleEntries[selectedIndex]
+        switch entry.payload {
+        case .files(let paths):
+            guard let path = paths.first, FileManager.default.fileExists(atPath: path) else {
+                quickLookPreviewURL = nil
+                return false
+            }
+            quickLookPreviewURL = URL(fileURLWithPath: path)
+        case .image(let data, let pasteboardType):
+            let ext = pasteboardType == NSPasteboard.PasteboardType.tiff.rawValue ? "tiff" : "png"
+            quickLookPreviewURL = writeQuickLookTemp(
+                data: data,
+                filename: "\(entry.id.uuidString).\(ext)"
+            )
+        case .text(let text):
+            quickLookPreviewURL = writeQuickLookTemp(
+                data: Data(text.utf8),
+                filename: "\(entry.id.uuidString).txt"
+            )
+        }
+        return quickLookPreviewURL != nil
+    }
+
+    private func writeQuickLookTemp(data: Data, filename: String) -> URL? {
+        let directory = quickLookTempDirectory
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let url = directory.appendingPathComponent(filename)
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private var quickLookTempDirectory: URL {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cpsmart-quicklook", isDirectory: true)
+    }
+
+    private func cleanupQuickLookTempFiles() {
+        try? FileManager.default.removeItem(at: quickLookTempDirectory)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        quickLookPreviewURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        quickLookPreviewURL as? QLPreviewItem
+    }
+
+    func previewPanel(
+        _ panel: QLPreviewPanel!,
+        sourceFrameOnScreenFor item: QLPreviewItem!
+    ) -> NSRect {
+        guard let window, let itemView = collectionView.item(at: selectedIndex)?.view else {
+            return .zero
+        }
+        return window.convertToScreen(itemView.convert(itemView.bounds, to: nil))
+    }
+
+    func previewPanelWillClose(_ panel: QLPreviewPanel!) {
+        quickLookPreviewURL = nil
+        cleanupQuickLookTempFiles()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window?.isVisible == true, !self.isDismissing else { return }
+            self.window?.makeKeyAndOrderFront(nil)
+            self.focusCollectionView()
+        }
     }
 
     private func selectAndChoose(index: Int, notifyWhenUnchanged: Bool) {
@@ -1050,6 +1212,7 @@ final class HistoryWindowController: NSWindowController,
         searchField.stringValue = demoQuery
         query = demoQuery
         refilter(fallbackIndex: 0)
+        focusSearchField()
     }
     #endif
 
@@ -1058,10 +1221,14 @@ final class HistoryWindowController: NSWindowController,
         refilter(fallbackIndex: 0)
     }
 
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        updateHintLabel()
+    }
+
     @objc private func filterChanged(_ sender: NSSegmentedControl) {
         typeFilter = TypeFilter(rawValue: sender.selectedSegment) ?? .all
         refilter(fallbackIndex: 0)
-        window?.makeFirstResponder(searchField)
+        focusCollectionView()
     }
 
     // MARK: 关闭
@@ -1070,6 +1237,7 @@ final class HistoryWindowController: NSWindowController,
         guard let window, window.isVisible, !isDismissing else { return }
         isDismissing = true
         removeKeyboardMonitor()
+        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
         thumbnailProvider.cancelAll()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Theme.exitDuration
@@ -1101,6 +1269,25 @@ final class HistoryWindowController: NSWindowController,
             }
             return nil
         }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+            [weak self] event in
+            guard let self,
+                  let window = self.window,
+                  window.isVisible,
+                  event.window === window else {
+                return event
+            }
+
+            let pointInSearchField = self.searchField.convert(event.locationInWindow, from: nil)
+            guard !self.searchField.bounds.contains(pointInSearchField) else { return event }
+
+            // 让控件先完成自己的点击行为，再把键盘焦点交给卡片列表。
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window, window.isVisible, !self.isDismissing else { return }
+                self.focusCollectionView()
+            }
+            return event
+        }
     }
 
     private func removeKeyboardMonitor() {
@@ -1108,9 +1295,31 @@ final class HistoryWindowController: NSWindowController,
             NSEvent.removeMonitor(keyboardMonitor)
             self.keyboardMonitor = nil
         }
+        if let mouseMonitor {
+            NSEvent.removeMonitor(mouseMonitor)
+            self.mouseMonitor = nil
+        }
     }
 
     private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
+        if isQuickLookVisible {
+            switch event.keyCode {
+            case 49, 53:
+                if !event.isARepeat {
+                    closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+                }
+            case 123, 124:
+                let offset = event.keyCode == 123 ? -1 : 1
+                moveSelection(by: offset)
+                if prepareQuickLookPreview() {
+                    QLPreviewPanel.shared()?.reloadData()
+                }
+            default:
+                break
+            }
+            return true
+        }
+
         // ⌘1–⌘4 切换类型筛选
         if event.modifierFlags.contains(.command), (18...21).contains(event.keyCode) {
             filterControl.selectedSegment = Int(event.keyCode) - 18
@@ -1118,19 +1327,39 @@ final class HistoryWindowController: NSWindowController,
             return true
         }
 
+        // 输入法存在组合文本时，候选选择、确认和取消都交还给系统文本输入。
+        if isComposingSearchText, !event.modifierFlags.contains(.command) {
+            return false
+        }
+
         switch event.keyCode {
         case 123:
+            if isSearchFieldFocused { return false }
             moveSelection(by: -1)
         case 124:
+            if isSearchFieldFocused { return false }
             moveSelection(by: 1)
+        case 48:
+            if isSearchFieldFocused {
+                focusCollectionView()
+            } else {
+                focusSearchField()
+            }
         case 36, 76:
             confirmAndPaste()
+        case 49:
+            if !event.isARepeat {
+                toggleQuickLook()
+            }
         case 51, 117:
             // 删除统一走 ⌘⌫（同 Finder）：搜索时退格要留给文本编辑，
             // 连按退格清空搜索词后若继续删记录容易误删
             if event.modifierFlags.contains(.command) {
                 deleteSelection()
             } else {
+                if !isSearchFieldFocused {
+                    focusSearchField()
+                }
                 return false
             }
         case 53:
@@ -1141,9 +1370,23 @@ final class HistoryWindowController: NSWindowController,
                 dismiss(restorePreviousApplication: true)
             }
         default:
+            if !isSearchFieldFocused, isPrintableTextInput(event) {
+                // 浏览态必须先按 Tab 才能搜索，避免无意按键改变筛选结果。
+                return true
+            }
             return false
         }
         return true
+    }
+
+    private func isPrintableTextInput(_ event: NSEvent) -> Bool {
+        let disallowedModifiers: NSEvent.ModifierFlags = [.command, .control, .function]
+        guard event.modifierFlags.intersection(disallowedModifiers).isEmpty,
+              let characters = event.characters,
+              !characters.isEmpty else { return false }
+        return characters.unicodeScalars.contains {
+            !CharacterSet.controlCharacters.contains($0)
+        }
     }
 
     // MARK: 前台应用追踪
@@ -1181,7 +1424,9 @@ final class HistoryWindowController: NSWindowController,
             palette: palette
         )
         item.onClick = { [weak self] in
-            self?.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: true)
+            guard let self else { return }
+            self.focusCollectionView()
+            self.selectAndChoose(index: indexPath.item, notifyWhenUnchanged: true)
         }
         item.onDoubleClick = { [weak self] in
             guard let self else { return }
