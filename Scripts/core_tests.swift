@@ -29,7 +29,6 @@ struct CoreTests {
         try testPinBehavior(in: temporaryDirectory)
         try testPinnedEntriesSurviveLimitsAndClear(in: temporaryDirectory)
         try testPinnedFieldLegacyCompatibility(in: temporaryDirectory)
-        try testIgnoredAppsAndClipboardExclusion()
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
         print("All cpsmart core tests passed.")
@@ -341,52 +340,6 @@ struct CoreTests {
             reloaded.entries.first?.isPinned == nil,
             "missing isPinned field did not decode as nil"
         )
-    }
-
-    private static func testIgnoredAppsAndClipboardExclusion() throws {
-        let suiteName = "cpsmartTests-ignoredApps-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let ignoredApps = IgnoredApps(userDefaults: defaults)
-        ignoredApps.bundleIDs = [" com.example.Secret ", "COM.EXAMPLE.SECRET", ""]
-        try require(
-            ignoredApps.bundleIDs == ["com.example.Secret"],
-            "ignored app list did not normalize duplicate values"
-        )
-        try require(
-            ignoredApps.contains("com.example.secret"),
-            "ignored app lookup was not case-insensitive"
-        )
-        ignoredApps.add("com.example.other")
-        try require(ignoredApps.contains("com.example.other"), "ignored app was not saved")
-        ignoredApps.remove("COM.EXAMPLE.OTHER")
-        try require(!ignoredApps.contains("com.example.other"), "ignored app was not removed")
-
-        let pasteboard = NSPasteboard(
-            name: NSPasteboard.Name("cpsmartTests-\(UUID().uuidString)")
-        )
-        pasteboard.clearContents()
-        let monitor = ClipboardMonitor(
-            pasteboard: pasteboard,
-            ignoredApps: ignoredApps,
-            sourceApplicationProvider: {
-                (name: "Secret App", bundleID: "com.example.secret")
-            }
-        )
-        var captureCount = 0
-        monitor.onCapture = { _, _, _ in captureCount += 1 }
-
-        pasteboard.clearContents()
-        pasteboard.setString("private", forType: .string)
-        monitor.poll()
-        try require(captureCount == 0, "ignored source application triggered onCapture")
-
-        ignoredApps.bundleIDs = []
-        pasteboard.clearContents()
-        pasteboard.setString("allowed", forType: .string)
-        monitor.poll()
-        try require(captureCount == 1, "allowed source application was not captured")
     }
 
     private static func testRetentionPreferences(in directory: URL) throws {

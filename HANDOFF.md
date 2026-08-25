@@ -118,7 +118,7 @@ final class ThumbnailProvider {
 ## 4. 功能路线图
 
 - **第 1 轮（已完成）**：搜索过滤、类型筛选（⌘1–4）、图片缩略图、来源应用记录与图标、UI 整体改版（毛玻璃面板 + Theme 调色板）、浅色/深色/跟随系统外观、删除改为 `⌘⌫`。
-- **第 2 轮（本文档 §6）**：置顶 pin、排除应用列表、历史保留策略设置、QuickLook 预览。
+- **第 2 轮（本文档 §6）**：置顶 pin、历史保留策略设置、QuickLook 预览。
 - **第 3 轮（候选）**：图片 OCR 文字搜索（Vision，本地）、跟随前台 App 筛选、自定义全局快捷键、图片落盘为独立文件（解决 history.json base64 膨胀）。
 - **明确不做**：iCloud/跨设备同步、AI/MCP 集成、富文本全格式保存、多层 pinboards、shell 文本变换 filter——与「轻量、本地、隐私」的定位冲突或复杂度不成比例。
 
@@ -145,12 +145,11 @@ final class ThumbnailProvider {
 - 测试：置顶排序、置顶免淘汰、clear 保留置顶、去重继承、旧 JSON 兼容。
 - UI（Kimi）：卡片左上角 pin 标记 + `⌘P` 切换置顶。Codex 只需保证 `HistoryStore` API 就绪。
 
-### T6 排除应用列表（P1，隐私刚需）
+### T6 排除应用列表（已取消）
 
-- UserDefaults 新增 `ignoredBundleIDs: [String]`。
-- `ClipboardMonitor.poll()`：来源应用 bundleID 命中列表即跳过（来源应用获取第 1 轮已有）。
-- 提供 `IgnoredApps` 小模块（读/写/contains），菜单入口（"排除此应用…"动态显示当前前台 App 名）由 Kimi 做。
-- 测试：命中排除列表时不触发 onCapture。
+- 曾实现按来源应用停止记录，并直接放在菜单栏一级菜单中。
+- 该入口难以理解，也缺少集中管理已排除应用的设置界面，因此功能和后台拦截均已移除。
+- 若未来重新评估，必须通过独立设置页管理列表，不能恢复一级菜单中的动态入口。
 
 ### T7 历史保留策略（P1，现在是硬编码 200 条 / 25 MB）
 
@@ -174,7 +173,7 @@ final class ThumbnailProvider {
 
 - **Maccy**（开源标杆）：`⌥P` 置顶（置顶不受清空影响）、`⌥⇧⏎` 纯文本粘贴、忽略自定义 pasteboard 类型、⌥点击菜单暂停记录、"忽略下一次复制"、可调轮询间隔。其置顶/清空语义直接照搬到 T5。
 - **Paste**：pinboards 多层收藏、iCloud 同步、AI 工具集成——都不适合 cpsmart 的定位，只借鉴"置顶"这一层。
-- **Pastebot 3**：文本变换 filter（含 shell script）、Stacks 顺序粘贴队列、Shortcuts 集成、应用黑名单。黑名单已收进 T6；Stacks/顺序粘贴是 CleanClip 同款"杀手锏"，实现成本高（队列状态机 + 依次自动粘贴），列入观察，暂不做。
+- **Pastebot 3**：文本变换 filter（含 shell script）、Stacks 顺序粘贴队列、Shortcuts 集成、应用黑名单。应用黑名单因缺少合适的设置入口未采用；Stacks/顺序粘贴是 CleanClip 同款"杀手锏"，实现成本高（队列状态机 + 依次自动粘贴），列入观察，暂不做。
 - **CleanClip**：粘贴队列、跟随前台 App 筛选（数据我们已有，`sourceAppBundleID` 筛选成本极低，第 3 轮候选）、拼音搜索、收藏夹。
 - **Raycast**：pin、Paste as Plain Text。注意：cpsmart 捕获时只取 `.string`，文本天然无格式，"纯文本粘贴"对我们无意义，不做。
 - **Paste It / Deck**：Vision OCR 图片搜索是主打卖点，本地运行不破坏隐私承诺 → T9。

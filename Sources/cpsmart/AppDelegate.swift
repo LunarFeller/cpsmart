@@ -6,13 +6,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let historyWindow = HistoryWindowController()
-    private let ignoredApps = IgnoredApps()
     private var hotKey: GlobalHotKey?
     private var statusItem: NSStatusItem!
     private var pauseMenuItem: NSMenuItem!
     private var loginMenuItem: NSMenuItem!
     private var appearanceMenuItem: NSMenuItem!
-    private var ignoredAppMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -151,13 +149,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appearanceMenuItem.submenu = appearanceSubmenu
         menu.addItem(appearanceMenuItem)
 
-        ignoredAppMenuItem = NSMenuItem(
-            title: "不记录当前应用的复制内容",
-            action: #selector(toggleIgnoreFrontmostApp),
-            keyEquivalent: ""
-        )
-        menu.addItem(ignoredAppMenuItem)
-
         menu.addItem(NSMenuItem(
             title: "清空历史…",
             action: #selector(clearHistory),
@@ -192,33 +183,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         pauseMenuItem.state = monitor.isPaused ? .on : .off
         loginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-
-        if let app = NSWorkspace.shared.frontmostApplication,
-           app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-           let bundleID = app.bundleIdentifier {
-            let name = app.localizedName ?? bundleID
-            let isIgnored = ignoredApps.contains(bundleID)
-            ignoredAppMenuItem.title = isIgnored
-                ? "恢复记录「\(name)」的复制内容"
-                : "不记录「\(name)」的复制内容"
-            ignoredAppMenuItem.toolTip = isIgnored
-                ? "恢复后，cpsmart 会重新记录来自该应用的新复制内容。"
-                : "启用后，来自该应用的新复制内容不会进入历史；已有历史不会删除。"
-            ignoredAppMenuItem.isHidden = false
-        } else {
-            ignoredAppMenuItem.isHidden = true
-        }
-    }
-
-    @objc private func toggleIgnoreFrontmostApp() {
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let bundleID = app.bundleIdentifier else { return }
-        if ignoredApps.contains(bundleID) {
-            ignoredApps.remove(bundleID)
-        } else {
-            ignoredApps.add(bundleID)
-        }
     }
 
     @objc private func selectAppearanceMode(_ sender: NSMenuItem) {
@@ -278,8 +242,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         • Return：粘贴所选记录；⌘⌫：删除所选记录
         • ⌘1–4：筛选全部、文本、图片或文件
         • Esc：先清除搜索，再关闭窗口
-
-        菜单中的“不记录「应用名」的复制内容”只阻止以后来自该应用的新记录，不会删除已有历史；再次点击即可恢复记录。
         """
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "cpsmart",

@@ -13,7 +13,6 @@ final class ClipboardMonitor {
     var isPaused = false
 
     private let pasteboard: NSPasteboard
-    private let ignoredApps: IgnoredApps
     private let sourceApplicationProvider: () -> SourceApplication?
     private var timer: Timer?
     private var lastChangeCount: Int
@@ -26,13 +25,11 @@ final class ClipboardMonitor {
 
     init(
         pasteboard: NSPasteboard = .general,
-        ignoredApps: IgnoredApps = IgnoredApps(),
         sourceApplicationProvider: @escaping () -> SourceApplication? = {
             ClipboardMonitor.frontmostSourceApplication()
         }
     ) {
         self.pasteboard = pasteboard
-        self.ignoredApps = ignoredApps
         self.sourceApplicationProvider = sourceApplicationProvider
         self.lastChangeCount = pasteboard.changeCount
     }
@@ -73,7 +70,6 @@ final class ClipboardMonitor {
         lastChangeCount = currentChangeCount
         guard !isPaused, !containsIgnoredType else { return }
         let sourceApplication = sourceApplicationProvider()
-        guard !ignoredApps.contains(sourceApplication?.bundleID) else { return }
         guard let payload = readPayload() else { return }
         onCapture?(payload, sourceApplication?.name, sourceApplication?.bundleID)
     }
