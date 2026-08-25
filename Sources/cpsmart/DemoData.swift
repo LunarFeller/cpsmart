@@ -11,7 +11,8 @@ enum DemoData {
                 payload: .text("git rebase -i HEAD~3"),
                 createdAt: now.addingTimeInterval(-40),
                 sourceAppName: "终端",
-                sourceAppBundleID: "com.apple.Terminal"
+                sourceAppBundleID: "com.apple.Terminal",
+                isPinned: true
             ),
             ClipboardEntry(
                 payload: .image(

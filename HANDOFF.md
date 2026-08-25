@@ -126,13 +126,19 @@ final class ThumbnailProvider {
 
 1. Codex 不碰 `HistoryWindowController.swift`（UI 唯一归属 Kimi）。
 2. 接口签名以本文档契约小节为准，如需变更先回到本文档更新再改代码。
-3. 快捷键占用现状：`⌘1–4` 类型筛选、`⌘⌫` 删除、`Esc` 清除搜索/关闭、`⏎` 粘贴、空格预留给 QuickLook。新增快捷键不得与这些冲突。
+3. 快捷键占用现状：`⌘1–4` 类型筛选、`⌘P` 置顶、`⌘⌫` 删除、`Esc` 清除搜索/关闭（QuickLook 打开时优先关 QL）、`⏎` 粘贴、`Space` QuickLook 预览。新增快捷键不得与这些冲突。
 4. **Codable 兼容性红线**：`ClipboardEntry` 新增字段必须是 Optional（或用自定义 `init(from:)` 提供默认值），否则旧 history.json 无法解码。每个新字段都要配一个「旧 JSON 能正常解码」的测试。
 5. 完成后 Codex 输出：改动文件清单 + `run_tests.sh` 结果 + 接口一致性确认。
 
 ## 6. 第 2 轮任务（竞品调研结论 → 落地任务）
 
 调研对象：Maccy、Paste、Pastebot 3、CleanClip、Raycast、Paste It。结论摘要见 §7。以下任务按价值/成本排序，T5–T7 为纯逻辑层（Codex 独立完成），T8 需要 UI 配合（Kimi 做面板侧，Codex 做数据层）。
+
+**状态（2026-08-25）：T5–T8 全部完成并已合入 main。**
+- T5：Codex 完成 `isPinned`/置顶排序/免淘汰/`clear`/`clearAll`/去重继承；Kimi 完成卡片右上角 pin 标记（accent 色 `pin.fill`，置顶时显示）+ `⌘P` 切换 + AppDelegate `onTogglePin` 接线。
+- T6：Codex 完成 `IgnoredApps` 与 monitor 短路；Kimi 完成菜单「排除「App名」的复制内容」（`menuWillOpen` 按 `frontmostApplication` 动态更新，已排除则显示「不再排除」）。
+- T7：Codex 完成三项保留设置（`maximumEntryCount`/`maximumStorageMB`/`keepDays`，UserDefaults）。设置入口 UI 未做。
+- T8：Kimi 完成 Space 触发 `QLPreviewPanel`（文件直接给 URL，图片/文本写 `NSTemporaryDirectory()/cpsmart-quicklook` 临时文件；QL 打开时 ←→ 移动并 reloadData，Space/Esc 关闭，dismiss 时清理）。搜索框聚焦时空格仍留给文本编辑。菜单「清空历史…」注明保留置顶，按住 ⌥ 出现「清空全部历史（含置顶）…」走 `clearAll()`，两者均有 NSAlert 确认。
 
 ### T5 置顶 pin（P1，竞品全系标配）
 

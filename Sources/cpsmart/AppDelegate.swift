@@ -6,11 +6,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let historyWindow = HistoryWindowController()
+    private let ignoredApps = IgnoredApps()
     private var hotKey: GlobalHotKey?
     private var statusItem: NSStatusItem!
     private var pauseMenuItem: NSMenuItem!
     private var loginMenuItem: NSMenuItem!
     private var appearanceMenuItem: NSMenuItem!
+    private var ignoredAppMenuItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -97,6 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.store.remove(id: entry.id)
             self.historyWindow.refresh(entries: self.store.entries)
         }
+        historyWindow.onTogglePin = { [weak self] entry in
+            guard let self else { return }
+            self.store.togglePin(id: entry.id)
+            self.historyWindow.refresh(entries: self.store.entries)
+        }
     }
 
     private func configureStatusItem() {
@@ -149,11 +156,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         appearanceMenuItem.submenu = appearanceSubmenu
         menu.addItem(appearanceMenuItem)
 
+        // 标题在 menuWillOpen 里按当前前台应用动态更新
+        ignoredAppMenuItem = NSMenuItem(
+            title: "排除此应用",
+            action: #selector(toggleIgnoreFrontmostApp),
+            keyEquivalent: ""
+        )
+        menu.addItem(ignoredAppMenuItem)
+
         menu.addItem(NSMenuItem(
             title: "清空历史…",
             action: #selector(clearHistory),
             keyEquivalent: ""
         ))
+        // 按住 Option 出现：连置顶记录一起清空
+        let clearAllItem = NSMenuItem(
+            title: "清空全部历史（含置顶）…",
+            action: #selector(clearAllHistory),
+            keyEquivalent: ""
+        )
+        clearAllItem.isAlternate = true
+        clearAllItem.keyEquivalentModifierMask = [.option]
+        menu.addItem(clearAllItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "关于 cpsmart",
@@ -183,6 +207,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         pauseMenuItem.state = monitor.isPaused ? .on : .off
         loginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+
+        // 前台应用即用户正在复制的应用；cpsmart 是 accessory 应用，不会抢占前台
+        if let app = NSWorkspace.shared.frontmostApplication,
+           app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           let bundleID = app.bundleIdentifier {
+            let name = app.localizedName ?? bundleID
+            ignoredAppMenuItem.title = ignoredApps.contains(bundleID)
+                ? "不再排除「\(name)」"
+                : "排除「\(name)」的复制内容"
+            ignoredAppMenuItem.isHidden = false
+        } else {
+            ignoredAppMenuItem.isHidden = true
+        }
+    }
+
+    @objc private func toggleIgnoreFrontmostApp() {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let bundleID = app.bundleIdentifier else { return }
+        if ignoredApps.contains(bundleID) {
+            ignoredApps.remove(bundleID)
+        } else {
+            ignoredApps.add(bundleID)
+        }
     }
 
     @objc private func selectAppearanceMode(_ sender: NSMenuItem) {
@@ -221,13 +269,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func clearHistory() {
         let alert = NSAlert()
-        alert.messageText = "清空全部剪贴板历史？"
-        alert.informativeText = "此操作无法撤销。"
+        alert.messageText = "清空剪贴板历史？"
+        alert.informativeText = "置顶的记录会保留。此操作无法撤销。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         store.clear()
+        historyWindow.refresh(entries: store.entries)
+    }
+
+    @objc private func clearAllHistory() {
+        let alert = NSAlert()
+        alert.messageText = "清空全部剪贴板历史（含置顶）？"
+        alert.informativeText = "置顶的记录也会一并删除。此操作无法撤销。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "全部清空")
+        alert.addButton(withTitle: "取消")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        store.clearAll()
         historyWindow.refresh(entries: store.entries)
     }
 
