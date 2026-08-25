@@ -265,6 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         • ⇧⌘V：打开或关闭剪贴板历史
         • 默认进入浏览；Tab：在卡片列表与搜索框之间切换
         • ← / →：选择记录；空格：Quick Look 预览
+        • 鼠标单击：选择并复制；双击：粘贴
         • Return：粘贴；⌘P：置顶；⌘⌫：删除
         • ⌘1–4：筛选全部、文本、图片或文件
         • Esc：先清除搜索，再关闭窗口

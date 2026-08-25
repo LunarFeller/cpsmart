@@ -208,6 +208,11 @@ private final class ClickableCardView: NSView {
         onHoverChanged?(false)
     }
 
+    /// 浮窗失去激活状态时，第一次点击也要直接选择卡片，不能只用于激活窗口。
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     /// 让整张卡片（包括文字、图片和底部信息）都使用同一个点击行为。
     /// 否则 NSTextField 等子视图会截获鼠标事件，点击内容时无法更新选中态。
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -215,6 +220,7 @@ private final class ClickableCardView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeKey()
         if event.clickCount >= 2 {
             onDoubleClick?()
         } else {
@@ -1187,7 +1193,7 @@ final class HistoryWindowController: NSWindowController,
         guard visibleEntries.indices.contains(index) else { return }
         let entry = visibleEntries[index]
         onChoose?(entry)
-        statusLabel.stringValue = "已选择 \(index + 1) / \(visibleEntries.count)"
+        statusLabel.stringValue = "已选择并复制 \(index + 1) / \(visibleEntries.count) · 双击可粘贴"
         statusLabel.textColor = palette.accent
     }
 
@@ -1199,14 +1205,41 @@ final class HistoryWindowController: NSWindowController,
         case .started:
             dismiss(restorePreviousApplication: false)
         case .permissionRequired:
-            statusLabel.stringValue = "当前版本的权限未生效，请删除系统设置中的 cpsmart 后重新添加"
+            statusLabel.stringValue = "请在“系统设置 → 隐私与安全性 → 辅助功能”中允许 cpsmart"
             statusLabel.textColor = .systemOrange
             NSSound.beep()
+            showAccessibilityPermissionHelp()
         case .targetUnavailable:
             statusLabel.stringValue = "无法找到刚才使用的应用，请关闭浮窗后重试"
             statusLabel.textColor = .systemOrange
             NSSound.beep()
         }
+    }
+
+    private func showAccessibilityPermissionHelp() {
+        let alert = NSAlert()
+        alert.messageText = "需要开启“辅助功能”权限"
+        alert.informativeText = """
+        请按下面的路径操作：
+
+        系统设置 → 隐私与安全性 → 辅助功能
+
+        1. 确认 cpsmart 已放在“应用程序”文件夹。
+        2. 点击应用列表下方的“+”，选择“应用程序”里的 cpsmart。
+        3. 打开 cpsmart 右侧的开关；按系统提示输入密码或使用 Touch ID。
+        4. 完全退出 cpsmart，然后重新打开。
+
+        如果列表中已有 cpsmart 但仍然无法粘贴，请先用“−”删除旧项，再用“+”重新添加。
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "打开辅助功能设置")
+        alert.addButton(withTitle: "稍后")
+
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let settingsURL = URL(
+                  string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+              ) else { return }
+        NSWorkspace.shared.open(settingsURL)
     }
 
     private func deleteSelection() {
