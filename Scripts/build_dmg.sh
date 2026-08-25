@@ -11,8 +11,74 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 STAGING_DIR="$BUILD_DIR/dmg-staging"
-DMG_PATH="$DIST_DIR/cpsmart-1.6.0-universal.dmg"
 SDK_PATH="${CPSMART_SDK_PATH:-}"
+VERSION="${CPSMART_VERSION:-$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")}"
+BUILD_NUMBER="${CPSMART_BUILD_NUMBER:-$(tr -d '[:space:]' < "$PROJECT_DIR/BUILD_NUMBER")}"
+SIGN_IDENTITY="${CPSMART_SIGN_IDENTITY:--}"
+NOTARY_PROFILE="${CPSMART_NOTARY_PROFILE:-}"
+RELEASE_MODE=false
+
+usage() {
+    echo "Usage: $0 [--local | --release] [--version X.Y.Z] [--build-number N]"
+    echo "          [--sign-identity NAME] [--notary-profile PROFILE]"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --local)
+            RELEASE_MODE=false
+            shift
+            ;;
+        --release)
+            RELEASE_MODE=true
+            shift
+            ;;
+        --version)
+            VERSION="${2:?--version requires a value}"
+            shift 2
+            ;;
+        --build-number)
+            BUILD_NUMBER="${2:?--build-number requires a value}"
+            shift 2
+            ;;
+        --sign-identity)
+            SIGN_IDENTITY="${2:?--sign-identity requires a value}"
+            shift 2
+            ;;
+        --notary-profile)
+            NOTARY_PROFILE="${2:?--notary-profile requires a value}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid version '$VERSION'; expected X.Y.Z" >&2
+    exit 2
+fi
+if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Invalid build number '$BUILD_NUMBER'; expected a positive integer" >&2
+    exit 2
+fi
+if [[ "$RELEASE_MODE" == true && "$SIGN_IDENTITY" == "-" ]]; then
+    echo "A formal release requires --sign-identity with a Developer ID Application identity" >&2
+    exit 2
+fi
+if [[ "$RELEASE_MODE" == true && -z "$NOTARY_PROFILE" ]]; then
+    echo "A formal release requires --notary-profile for notarytool" >&2
+    exit 2
+fi
+
+DMG_PATH="$DIST_DIR/cpsmart-$VERSION-universal.dmg"
 
 if [[ -z "$SDK_PATH" && -d /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk ]]; then
     SDK_PATH="/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk"
@@ -47,6 +113,8 @@ ARM_BINARY="$(build_architecture arm64 | tail -n 1)"
 lipo -create "$X86_BINARY" "$ARM_BINARY" -output "$MACOS_DIR/cpsmart"
 chmod 755 "$MACOS_DIR/cpsmart"
 cp "$PROJECT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS_DIR/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
 
 rm -rf "$ICONSET_DIR"
 CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/module-cache-icon" \
@@ -55,7 +123,17 @@ CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/module-cache-icon" \
     swift -sdk "$SDK_PATH" "$PROJECT_DIR/Scripts/create_icns.swift" \
     "$ICONSET_DIR" "$RESOURCES_DIR/AppIcon.icns"
 
-codesign --force --deep --sign - "$APP_DIR"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    codesign --force --deep --sign - "$APP_DIR"
+else
+    codesign \
+        --force \
+        --deep \
+        --options runtime \
+        --timestamp \
+        --sign "$SIGN_IDENTITY" \
+        "$APP_DIR"
+fi
 codesign --verify --deep --strict "$APP_DIR"
 
 rm -rf "$STAGING_DIR"
@@ -71,4 +149,15 @@ hdiutil create \
     -ov \
     "$DMG_PATH"
 
+if [[ "$RELEASE_MODE" == true ]]; then
+    xcrun notarytool submit \
+        "$DMG_PATH" \
+        --keychain-profile "$NOTARY_PROFILE" \
+        --wait
+    xcrun stapler staple "$DMG_PATH"
+    xcrun stapler validate "$DMG_PATH"
+fi
+
+echo "cpsmart $VERSION (build $BUILD_NUMBER)"
+echo "Mode: $([[ "$RELEASE_MODE" == true ]] && echo release || echo local)"
 echo "$DMG_PATH"

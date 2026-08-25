@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        configureApplicationIcon()
         configureHistoryWindow()
         configureStatusItem()
         configureClipboardMonitor()
@@ -65,6 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+    }
+
+    private func configureApplicationIcon() {
+        guard let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: iconURL) else { return }
+        NSApp.applicationIconImage = icon
     }
 
     private func configureClipboardMonitor() {
@@ -258,6 +265,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showAbout() {
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "开发版"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let displayVersion = build.map { "\(version) (\($0))" } ?? version
         let usage = """
         轻量、私密的本地剪贴板历史工具。历史只保存在这台 Mac 上。
 
@@ -273,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         """
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "cpsmart",
-            .applicationVersion: "1.6.0",
+            .applicationVersion: displayVersion,
             .credits: NSAttributedString(string: usage)
         ])
         NSApp.activate(ignoringOtherApps: true)

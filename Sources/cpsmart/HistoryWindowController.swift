@@ -1027,7 +1027,7 @@ final class HistoryWindowController: NSWindowController,
             let escapeHint = query.isEmpty ? "Esc 关闭" : "Esc 清除搜索"
             hintLabel.stringValue = "输入筛选 · Tab 返回浏览 · 空格 预览 · ⏎ 粘贴 · \(escapeHint)"
         } else {
-            hintLabel.stringValue = "← → 选择 · 空格 预览 · ⏎ 粘贴 · Tab 搜索 · ⌘P 置顶 · ⌘⌫ 删除 · Esc 关闭"
+            hintLabel.stringValue = "单击选择并复制 · 双击粘贴 · 空格预览 · Tab 搜索 · ⌘P 置顶 · ⌘⌫ 删除 · Esc 关闭"
         }
     }
 

@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.6.0</string>
+    <string>1.7.0</string>
     <key>CFBundleVersion</key>
-    <string>7</string>
+    <string>8</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
@@ -29,7 +29,7 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>cpsmart 用于在你按回车后，将选中的剪贴板内容直接粘贴到原来的应用。</string>
+    <string>cpsmart 仅在你按回车或双击卡片后，将选中的剪贴板内容粘贴到原来的应用。</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>
