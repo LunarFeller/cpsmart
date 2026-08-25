@@ -197,6 +197,12 @@ private final class ClickableCardView: NSView {
         onHoverChanged?(false)
     }
 
+    /// 让整张卡片（包括文字、图片和底部信息）都使用同一个点击行为。
+    /// 否则 NSTextField 等子视图会截获鼠标事件，点击内容时无法更新选中态。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
+
     override func mouseDown(with event: NSEvent) {
         if event.clickCount >= 2 {
             onDoubleClick?()
@@ -275,6 +281,9 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         iconView.imageScaling = .scaleProportionallyUpOrDown
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.wantsLayer = true
+        titleLabel.layer?.masksToBounds = true
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.font = .systemFont(ofSize: 12)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 6
@@ -337,6 +346,9 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         textConstraints = [
             titleLabel.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
             titleLabel.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
+            titleLabel.widthAnchor.constraint(
+                lessThanOrEqualToConstant: Theme.cardSize.width - 24
+            ),
             titleLabel.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 11),
             titleLabel.bottomAnchor.constraint(
                 lessThanOrEqualTo: metaTypeLabel.topAnchor, constant: -6
@@ -395,6 +407,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
             titleLabel.alignment = .left
             titleLabel.font = .systemFont(ofSize: 12)
             titleLabel.lineBreakMode = .byTruncatingTail
+            titleLabel.maximumNumberOfLines = 6
             titleLabel.stringValue = Self.preview(text)
             metaTypeLabel.stringValue = "文本 · \(text.count) 字符"
             metaTypeLabel.textColor = palette.typeText
@@ -486,12 +499,16 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     }
 
     private static func preview(_ text: String) -> String {
-        text
+        let normalized = String(text.prefix(2_000))
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .prefix(6)
             .joined(separator: "\n")
+
+        let maximumCharacterCount = 360
+        guard normalized.count > maximumCharacterCount else { return normalized }
+        return String(normalized.prefix(maximumCharacterCount)) + "…"
     }
 
     private static let relativeDate: RelativeDateTimeFormatter = {
