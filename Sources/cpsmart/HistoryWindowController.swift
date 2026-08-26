@@ -1,6 +1,15 @@
 import AppKit
 import Quartz
 
+private extension NSRect {
+    func approximatelyEquals(_ other: NSRect, tolerance: CGFloat = 0.5) -> Bool {
+        abs(minX - other.minX) <= tolerance
+            && abs(minY - other.minY) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
+    }
+}
+
 // MARK: - 外观模式与调色板
 
 /// 外观模式：跟随系统 / 浅色 / 深色。存 UserDefaults，从菜单栏「外观」切换。
@@ -39,34 +48,16 @@ enum AppearanceMode: String, CaseIterable {
     }
 }
 
-/// 随外观切换的调色板。所有颜色都必须从这里取，不允许另写硬编码颜色。
-struct Palette {
-    let accent: NSColor
-    let textPrimary: NSColor
-    let textSecondary: NSColor
-    let textTertiary: NSColor
-    let cardFill: NSColor
-    let cardFillHover: NSColor
-    let cardFillSelected: NSColor
-    let cardBorder: NSColor
-    let panelBorder: NSColor
-    let panelTint: NSColor
-    let thumbPlaceholder: NSColor
-    let typeText: NSColor
-    let typeImage: NSColor
-    let typeFile: NSColor
-}
-
-// MARK: - Theme（尺寸与动效 token + 调色板工厂）
+// MARK: - Theme（尺寸与动效 token）
 
 private enum Theme {
     // 面板
     static let panelHeight: CGFloat = 248
-    static let panelRadius: CGFloat = 20
+    static let panelRadius = AppVisualTheme.panelRadius
 
     // 卡片
     static let cardSize = NSSize(width: 204, height: 150)
-    static let cardRadius: CGFloat = 12
+    static let cardRadius = AppVisualTheme.cardRadius
     static let thumbRadius: CGFloat = 8
 
     // 动效
@@ -74,49 +65,11 @@ private enum Theme {
     static let entranceDuration: TimeInterval = 0.18
     static let exitDuration: TimeInterval = 0.12
 
-    static func palette(isDark: Bool) -> Palette {
-        if isDark {
-            let accent = NSColor(srgbRed: 10 / 255, green: 132 / 255, blue: 255 / 255, alpha: 1)
-            return Palette(
-                accent: accent,
-                textPrimary: NSColor.white.withAlphaComponent(0.92),
-                textSecondary: NSColor.white.withAlphaComponent(0.55),
-                textTertiary: NSColor.white.withAlphaComponent(0.38),
-                cardFill: NSColor.white.withAlphaComponent(0.055),
-                cardFillHover: NSColor.white.withAlphaComponent(0.09),
-                cardFillSelected: accent.withAlphaComponent(0.16),
-                cardBorder: NSColor.white.withAlphaComponent(0.10),
-                panelBorder: NSColor.white.withAlphaComponent(0.16),
-                panelTint: NSColor(srgbRed: 0.055, green: 0.065, blue: 0.085, alpha: 0.78),
-                thumbPlaceholder: NSColor.white.withAlphaComponent(0.045),
-                typeText: NSColor(srgbRed: 0.35, green: 0.78, blue: 0.98, alpha: 1),
-                typeImage: NSColor(srgbRed: 0.72, green: 0.55, blue: 0.98, alpha: 1),
-                typeFile: NSColor(srgbRed: 0.98, green: 0.72, blue: 0.32, alpha: 1)
-            )
-        }
-        let accent = NSColor(srgbRed: 0, green: 122 / 255, blue: 1, alpha: 1)
-        return Palette(
-            accent: accent,
-            textPrimary: NSColor.black.withAlphaComponent(0.86),
-            textSecondary: NSColor.black.withAlphaComponent(0.56),
-            textTertiary: NSColor.black.withAlphaComponent(0.42),
-            cardFill: NSColor.black.withAlphaComponent(0.045),
-            cardFillHover: NSColor.black.withAlphaComponent(0.075),
-            cardFillSelected: accent.withAlphaComponent(0.14),
-            cardBorder: NSColor.black.withAlphaComponent(0.10),
-            panelBorder: NSColor.black.withAlphaComponent(0.12),
-            panelTint: NSColor.white.withAlphaComponent(0.72),
-            thumbPlaceholder: NSColor.black.withAlphaComponent(0.05),
-            typeText: NSColor(srgbRed: 0.03, green: 0.50, blue: 0.70, alpha: 1),
-            typeImage: NSColor(srgbRed: 0.55, green: 0.32, blue: 0.82, alpha: 1),
-            typeFile: NSColor(srgbRed: 0.80, green: 0.52, blue: 0.05, alpha: 1)
-        )
-    }
 }
 
 // MARK: - 图片元信息（轻量读取，不解码像素；缩略图本体见 ThumbnailProvider.swift）
 
-private enum ImageMetadata {
+enum ImageMetadata {
     /// 只读图片尺寸，不解码像素，可在主线程调用。
     static func pixelSize(of data: Data) -> NSSize? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -137,35 +90,9 @@ private final class FloatingHistoryPanel: NSPanel {
 }
 
 private final class KeyboardCollectionView: NSCollectionView {
-    var onMoveLeft: (() -> Void)?
-    var onMoveRight: (() -> Void)?
-    var onConfirm: (() -> Void)?
-    var onDelete: (() -> Void)?
-    var onEscape: (() -> Void)?
     var onBackgroundClick: (() -> Void)?
 
     override var acceptsFirstResponder: Bool { true }
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 123:
-            onMoveLeft?()
-        case 124:
-            onMoveRight?()
-        case 36, 76:
-            onConfirm?()
-        case 51, 117:
-            if event.modifierFlags.contains(.command) {
-                onDelete?()
-            } else {
-                super.keyDown(with: event)
-            }
-        case 53:
-            onEscape?()
-        default:
-            super.keyDown(with: event)
-        }
-    }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
@@ -177,10 +104,256 @@ private final class KeyboardCollectionView: NSCollectionView {
     }
 }
 
+private struct PinboardDragDescriptor {
+    let entryID: UUID
+    let sourcePinboardID: UUID?
+
+    static let pasteboardType = NSPasteboard.PasteboardType("com.cpsmart.pinboard-entry")
+
+    func pasteboardItem() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        var value = entryID.uuidString
+        if let sourcePinboardID {
+            value += "|\(sourcePinboardID.uuidString)"
+        }
+        item.setString(value, forType: Self.pasteboardType)
+        return item
+    }
+
+    static func read(from pasteboard: NSPasteboard) -> PinboardDragDescriptor? {
+        guard let rawValue = pasteboard.string(forType: pasteboardType) else { return nil }
+        let parts = rawValue.split(separator: "|", maxSplits: 1).map(String.init)
+        guard let entryID = UUID(uuidString: parts[0]) else { return nil }
+        let sourcePinboardID = parts.count == 2 ? UUID(uuidString: parts[1]) : nil
+        return PinboardDragDescriptor(entryID: entryID, sourcePinboardID: sourcePinboardID)
+    }
+}
+
+private final class PinboardTabButton: NSButton {
+    var onAcceptHistoryEntry: ((UUID) -> Void)? {
+        didSet {
+            if onAcceptHistoryEntry != nil {
+                registerForDraggedTypes([PinboardDragDescriptor.pasteboardType])
+            }
+        }
+    }
+
+    var dropHighlightColor: NSColor = .controlAccentColor
+
+    private var palette = AppVisualTheme.palette(isDark: true)
+    private var isSelectedTab = false
+    private var tintColor: NSColor?
+    private var isHovered = false
+    private var isDropHighlighted = false
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override var intrinsicContentSize: NSSize {
+        var size = super.intrinsicContentSize
+        size.width += 18
+        size.height = 24
+        return size
+    }
+
+    /// 无边框按钮默认把内容贴左绘制；背景、边框、内容全部在 draw 里手动居中绘制，
+    /// 避免依赖 updateLayer 的调用时机。
+    override func draw(_ dirtyRect: NSRect) {
+        let fill: NSColor
+        if isSelectedTab {
+            fill = (tintColor ?? palette.accent).withAlphaComponent(0.18)
+        } else if isHovered {
+            fill = palette.cardFillHover
+        } else {
+            fill = palette.cardFill
+        }
+        let pill = NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7)
+        fill.setFill()
+        pill.fill()
+        if isDropHighlighted {
+            dropHighlightColor.setStroke()
+            pill.lineWidth = 2
+            pill.stroke()
+        }
+
+        guard let cell else { return }
+        let contentSize = cell.cellSize
+        guard contentSize.width > 0, contentSize.height > 0,
+              contentSize.width < bounds.width else {
+            super.draw(dirtyRect)
+            return
+        }
+        let centered = NSRect(
+            x: (bounds.width - contentSize.width) / 2,
+            y: (bounds.height - contentSize.height) / 2,
+            width: contentSize.width,
+            height: contentSize.height
+        )
+        cell.draw(withFrame: centered, in: self)
+    }
+
+    /// 扁平药丸样式：未选中只有浅底，选中用收藏板颜色淡填，不再使用系统边框。
+    func applyStyle(palette: Palette, selected: Bool, tint: NSColor?) {
+        self.palette = palette
+        isSelectedTab = selected
+        tintColor = tint
+        isBordered = false
+        wantsLayer = true
+        let weight: NSFont.Weight = selected ? .semibold : .medium
+        attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11.5, weight: weight),
+                .foregroundColor: selected ? palette.textPrimary : palette.textSecondary
+            ]
+        )
+        needsDisplay = true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        needsDisplay = true
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              onAcceptHistoryEntry != nil else { return [] }
+        setDropHighlighted(true)
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              onAcceptHistoryEntry != nil else { return [] }
+        return .copy
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        setDropHighlighted(false)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        PinboardDragDescriptor.read(from: sender.draggingPasteboard)?.sourcePinboardID == nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { setDropHighlighted(false) }
+        guard let descriptor = PinboardDragDescriptor.read(from: sender.draggingPasteboard),
+              descriptor.sourcePinboardID == nil,
+              let onAcceptHistoryEntry else { return false }
+        onAcceptHistoryEntry(descriptor.entryID)
+        return true
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        // 拖拽被 Esc 取消时不会触发 draggingExited，需要兜底清理高亮。
+        setDropHighlighted(false)
+    }
+
+    private func setDropHighlighted(_ isHighlighted: Bool) {
+        isDropHighlighted = isHighlighted
+        needsDisplay = true
+    }
+}
+
+/// 新建收藏板用的色点行选择器：直接点选颜色，选中项带描边圈。
+private final class PinboardColorPickerView: NSView {
+    private(set) var selectedIndex: Int = 0 {
+        didSet { updateSelection() }
+    }
+
+    private var buttons: [NSButton] = []
+
+    init(colors: [NSColor], names: [String]) {
+        super.init(frame: .zero)
+        let stack = NSStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .horizontal
+        stack.spacing = 10
+        for (index, color) in colors.enumerated() {
+            let button = NSButton(
+                image: Self.dotImage(color, diameter: 16),
+                target: self,
+                action: #selector(choose(_:))
+            )
+            button.tag = index
+            button.isBordered = false
+            button.wantsLayer = true
+            button.toolTip = index < names.count ? names[index] : nil
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 22),
+                button.heightAnchor.constraint(equalToConstant: 22)
+            ])
+            buttons.append(button)
+            stack.addArrangedSubview(button)
+        }
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 22)
+        ])
+        updateSelection()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func select(index: Int) {
+        guard buttons.indices.contains(index) else { return }
+        selectedIndex = index
+    }
+
+    private func updateSelection() {
+        for (index, button) in buttons.enumerated() {
+            let selected = index == selectedIndex
+            button.layer?.cornerRadius = 11
+            button.layer?.borderWidth = selected ? 2 : 0
+            button.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.55).cgColor
+        }
+    }
+
+    @objc private func choose(_ sender: NSButton) {
+        selectedIndex = sender.tag
+    }
+
+    private static func dotImage(_ color: NSColor, diameter: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: diameter, height: diameter))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: diameter - 2, height: diameter - 2)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+}
+
 private final class ClickableCardView: NSView {
     var onClick: ((Int) -> Void)?
+    var onDrag: ((NSEvent, NSView) -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
+    private var didBeginDrag = false
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -220,8 +393,19 @@ private final class ClickableCardView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        didBeginDrag = false
         window?.makeKey()
         onClick?(event.clickCount)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !didBeginDrag else { return }
+        didBeginDrag = true
+        onDrag?(event, self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        didBeginDrag = false
     }
 
     override func accessibilityPerformPress() -> Bool {
@@ -235,6 +419,10 @@ private final class ClickableCardView: NSView {
 private final class HistoryCollectionItem: NSCollectionViewItem {
     var onClick: ((Int) -> Void)? {
         didSet { cardView.onClick = onClick }
+    }
+
+    var onDrag: ((NSEvent, NSView) -> Void)? {
+        didSet { cardView.onDrag = onDrag }
     }
 
     private let cardView = ClickableCardView()
@@ -254,7 +442,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
     private var metaLeadingDirect: NSLayoutConstraint!
     private var metaLeadingAfterIcon: NSLayoutConstraint!
     private var representedEntryID: UUID?
-    private var palette = Theme.palette(isDark: true)
+    private var palette = AppVisualTheme.palette(isDark: true)
 
     private var isHovered = false {
         didSet { updateAppearance() }
@@ -582,20 +770,32 @@ final class HistoryWindowController: NSWindowController,
     NSSearchFieldDelegate,
     NSWindowDelegate,
     QLPreviewPanelDataSource,
-    QLPreviewPanelDelegate
+    QLPreviewPanelDelegate,
+    NSDraggingSource
 {
     var onChoose: ((ClipboardEntry) -> Void)?
     var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
     var onDelete: ((ClipboardEntry) -> Void)?
     var onTogglePin: ((ClipboardEntry) -> Void)?
+    var onCreatePinboard: ((String, PinboardColor) -> Pinboard?)?
+    var onRenamePinboard: ((UUID, String) -> Void)?
+    var onSetPinboardColor: ((UUID, PinboardColor) -> Void)?
+    var onDeletePinboard: ((UUID) -> Void)?
+    var onAddToPinboard: ((ClipboardEntry, UUID) -> Void)?
+    var onRemoveFromPinboard: ((ClipboardEntry, UUID) -> Void)?
+    var onMovePinboardEntry: ((UUID, UUID, Int) -> Void)?
 
     private static let itemIdentifier = NSUserInterfaceItemIdentifier("HistoryCollectionItem")
     private let collectionView = KeyboardCollectionView()
     private let flowLayout = NSCollectionViewFlowLayout()
     private let thumbnailProvider = ThumbnailProvider()
+    private let adaptivePreviewController = AdaptivePreviewController()
+    private let shortcutStore: ShortcutStore
+    private let shortcutMatcher: ShortcutMatcher
     private let searchField = NSSearchField()
     private var filterControl: NSSegmentedControl!
-    private let titleLabel = NSTextField(labelWithString: "cpsmart")
+    private let favoriteButton = NSButton()
+    private let boardStackView = NSStackView()
     private let countLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "")
@@ -603,7 +803,10 @@ final class HistoryWindowController: NSWindowController,
     private var effectView: NSVisualEffectView!
     private var tintView: NSView!
 
-    private var palette = Theme.palette(isDark: true)
+    private var palette = AppVisualTheme.palette(isDark: true)
+    private var historyEntries: [ClipboardEntry] = []
+    private var pinboards: [Pinboard] = []
+    private var selectedPinboardID: UUID?
     private var allEntries: [ClipboardEntry] = []
     private var visibleEntries: [ClipboardEntry] = []
     private var query = ""
@@ -611,15 +814,30 @@ final class HistoryWindowController: NSWindowController,
     private var selectedIndex = 0
     private var previousApplication: NSRunningApplication?
     private var lastExternalApplication: NSRunningApplication?
+
+    /// 粘贴与焦点归还的目标：用户最近一次操作的外部应用。
+    /// 浮窗常驻期间用户可能点击了别的窗口，目标应跟随真实焦点，
+    /// 而不是锁定在浮窗打开的那一刻。
+    private var pasteTargetApplication: NSRunningApplication? {
+        lastExternalApplication ?? previousApplication
+    }
     private var suppressSelectionCallback = false
     private var keyboardMonitor: Any?
     private var mouseMonitor: Any?
     private var quickLookPreviewURL: URL?
+    private var isPositioningQuickLookPanel = false
+    /// 预览会话：Space 开启后方向键浏览会持续预览文本/图片；
+    /// 切到文件只是暂时无预览，切回文本/图片时恢复。Space/Esc 或关闭窗口才结束会话。
+    private var isPreviewSessionActive = false
     private var activationObserver: NSObjectProtocol?
     private var systemThemeObserver: NSObjectProtocol?
+    private var shortcutObserver: NSObjectProtocol?
     private var isDismissing = false
+    private var dismissalGeneration = 0
 
-    init() {
+    init(shortcutStore: ShortcutStore) {
+        self.shortcutStore = shortcutStore
+        shortcutMatcher = ShortcutMatcher(store: shortcutStore)
         let panel = FloatingHistoryPanel(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: Theme.panelHeight),
             styleMask: [.borderless],
@@ -655,6 +873,13 @@ final class HistoryWindowController: NSWindowController,
         ) { [weak self] _ in
             self?.applyAppearanceMode()
         }
+        shortcutObserver = NotificationCenter.default.addObserver(
+            forName: ShortcutStore.didChangeNotification,
+            object: shortcutStore,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateHintLabel()
+        }
         buildInterface()
         applyAppearanceMode()
     }
@@ -665,6 +890,7 @@ final class HistoryWindowController: NSWindowController,
 
     deinit {
         removeKeyboardMonitor()
+        adaptivePreviewController.close()
         cleanupQuickLookTempFiles()
         if let activationObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
@@ -672,12 +898,15 @@ final class HistoryWindowController: NSWindowController,
         if let systemThemeObserver {
             DistributedNotificationCenter.default().removeObserver(systemThemeObserver)
         }
+        if let shortcutObserver {
+            NotificationCenter.default.removeObserver(shortcutObserver)
+        }
     }
 
     /// 应用外观模式；传 nil 时读取当前设置。菜单切换或系统主题变化时调用。
     func applyAppearanceMode(_ mode: AppearanceMode? = nil) {
         let isDark = (mode ?? AppearanceMode.current).isDark
-        palette = Theme.palette(isDark: isDark)
+        palette = AppVisualTheme.palette(isDark: isDark)
 
         let appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
         window?.appearance = appearance
@@ -685,22 +914,29 @@ final class HistoryWindowController: NSWindowController,
         tintView?.layer?.backgroundColor = palette.panelTint.cgColor
         effectView?.layer?.borderColor = palette.panelBorder.cgColor
 
-        titleLabel.textColor = palette.textPrimary
         countLabel.textColor = palette.textTertiary
         statusLabel.textColor = palette.textSecondary
         hintLabel.textColor = palette.textTertiary
         emptyLabel.textColor = palette.textTertiary
 
         // 卡片颜色由各 item 在 configure 时按 palette 重写
+        rebuildPinboardTabs()
         reloadCollection(selecting: visibleEntries.isEmpty ? nil : selectedIndex, notify: false)
     }
 
-    func show(entries: [ClipboardEntry]) {
+    func show(entries: [ClipboardEntry], pinboards: [Pinboard] = []) {
         if window?.isVisible == true {
-            if !isDismissing {
+            if isDismissing {
+                // 退场动画进行中：作废旧动画的完成回调并立即复位，
+                // 避免全局快捷键在 0.12s 动画窗口内被吞掉。
+                dismissalGeneration += 1
+                window?.orderOut(nil)
+                window?.alphaValue = 1
+                isDismissing = false
+            } else {
                 dismiss(restorePreviousApplication: true)
+                return
             }
-            return
         }
 
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
@@ -711,12 +947,17 @@ final class HistoryWindowController: NSWindowController,
             previousApplication = lastExternalApplication
         }
 
+        historyEntries = entries
+        self.pinboards = pinboards
+        selectedPinboardID = nil
         allEntries = entries
         query = ""
         searchField.stringValue = ""
+        searchField.placeholderString = "搜索剪贴板历史"
         typeFilter = .all
         filterControl.selectedSegment = 0
         selectedIndex = 0
+        rebuildPinboardTabs()
 
         guard let window else { return }
         let finalFrame = targetFrame()
@@ -753,11 +994,36 @@ final class HistoryWindowController: NSWindowController,
                 ? visibleEntries[selectedIndex].id
                 : nil
         )
+        historyEntries = entries
+        guard selectedPinboardID == nil else {
+            rebuildPinboardTabs()
+            return
+        }
         allEntries = entries
         refilter(
             selectingID: selectedID,
             fallbackIndex: selectingEntryID == nil ? selectedIndex : 0
         )
+    }
+
+    func refresh(pinboards: [Pinboard]) {
+        let selectedID = visibleEntries.indices.contains(selectedIndex)
+            ? visibleEntries[selectedIndex].id
+            : nil
+        self.pinboards = pinboards
+        if let boardID = selectedPinboardID,
+           let board = pinboards.first(where: { $0.id == boardID }) {
+            allEntries = board.entries
+            searchField.placeholderString = "在“\(board.name)”中搜索"
+            refilter(selectingID: selectedID, fallbackIndex: selectedIndex)
+        } else if selectedPinboardID != nil {
+            selectedPinboardID = nil
+            allEntries = historyEntries
+            searchField.placeholderString = "搜索剪贴板历史"
+            refilter(fallbackIndex: 0)
+        }
+        rebuildPinboardTabs()
+        syncPreviewWithSelection()
     }
 
     // MARK: 界面搭建
@@ -796,11 +1062,10 @@ final class HistoryWindowController: NSWindowController,
         headerContainer.translatesAutoresizingMaskIntoConstraints = false
         effectView.addSubview(headerContainer)
 
-        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
         countLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         countLabel.translatesAutoresizingMaskIntoConstraints = false
+        countLabel.setContentHuggingPriority(.required, for: .horizontal)
+        countLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         searchField.translatesAutoresizingMaskIntoConstraints = false
         searchField.placeholderString = "搜索剪贴板历史"
@@ -817,15 +1082,66 @@ final class HistoryWindowController: NSWindowController,
         filterControl.controlSize = .small
         filterControl.selectedSegment = 0
 
+        favoriteButton.translatesAutoresizingMaskIntoConstraints = false
+        favoriteButton.image = NSImage(
+            systemSymbolName: "star",
+            accessibilityDescription: "收藏到收藏板"
+        )
+        favoriteButton.imagePosition = .imageOnly
+        favoriteButton.bezelStyle = .roundRect
+        favoriteButton.controlSize = .small
+        favoriteButton.target = self
+        favoriteButton.action = #selector(showFavoriteMenu(_:))
+        favoriteButton.toolTip = "收藏到收藏板"
+
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         statusLabel.alignment = .right
+        statusLabel.lineBreakMode = .byTruncatingTail
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        headerContainer.addSubview(titleLabel)
         headerContainer.addSubview(countLabel)
         headerContainer.addSubview(searchField)
         headerContainer.addSubview(filterControl)
+        headerContainer.addSubview(favoriteButton)
         headerContainer.addSubview(statusLabel)
+
+        // 收藏板标签与头部合并为一行；历史记录固定在最左，收藏板过多时横向滚动。
+        let boardScrollView = NSScrollView()
+        boardScrollView.translatesAutoresizingMaskIntoConstraints = false
+        boardScrollView.drawsBackground = false
+        boardScrollView.hasHorizontalScroller = false
+        boardScrollView.hasVerticalScroller = false
+        boardScrollView.horizontalScrollElasticity = .automatic
+        let boardMinimumWidthConstraint = boardScrollView.widthAnchor.constraint(
+            greaterThanOrEqualToConstant: 150
+        )
+        boardMinimumWidthConstraint.priority = .defaultHigh
+        boardMinimumWidthConstraint.isActive = true
+
+        let boardDocumentView = NSView()
+        boardDocumentView.translatesAutoresizingMaskIntoConstraints = false
+        boardScrollView.documentView = boardDocumentView
+        headerContainer.addSubview(boardScrollView)
+
+        boardStackView.translatesAutoresizingMaskIntoConstraints = false
+        boardStackView.orientation = .horizontal
+        boardStackView.alignment = .centerY
+        boardStackView.spacing = 7
+        boardDocumentView.addSubview(boardStackView)
+        NSLayoutConstraint.activate([
+            boardDocumentView.leadingAnchor.constraint(equalTo: boardScrollView.contentView.leadingAnchor),
+            boardDocumentView.topAnchor.constraint(equalTo: boardScrollView.contentView.topAnchor),
+            boardDocumentView.bottomAnchor.constraint(equalTo: boardScrollView.contentView.bottomAnchor),
+            boardDocumentView.widthAnchor.constraint(
+                greaterThanOrEqualTo: boardScrollView.contentView.widthAnchor
+            ),
+            boardStackView.leadingAnchor.constraint(equalTo: boardDocumentView.leadingAnchor),
+            boardStackView.trailingAnchor.constraint(
+                lessThanOrEqualTo: boardDocumentView.trailingAnchor
+            ),
+            boardStackView.centerYAnchor.constraint(equalTo: boardDocumentView.centerYAnchor)
+        ])
 
         // 卡片流
         let scrollView = NSScrollView()
@@ -853,13 +1169,8 @@ final class HistoryWindowController: NSWindowController,
             HistoryCollectionItem.self,
             forItemWithIdentifier: Self.itemIdentifier
         )
-        collectionView.onMoveLeft = { [weak self] in self?.moveSelection(by: -1) }
-        collectionView.onMoveRight = { [weak self] in self?.moveSelection(by: 1) }
-        collectionView.onConfirm = { [weak self] in self?.confirmAndPaste() }
-        collectionView.onDelete = { [weak self] in self?.deleteSelection() }
-        collectionView.onEscape = { [weak self] in
-            self?.dismiss(restorePreviousApplication: true)
-        }
+        collectionView.registerForDraggedTypes([PinboardDragDescriptor.pasteboardType])
+        collectionView.setDraggingSourceOperationMask([.copy, .move], forLocal: true)
         collectionView.onBackgroundClick = { [weak self] in
             self?.focusCollectionView()
         }
@@ -892,26 +1203,30 @@ final class HistoryWindowController: NSWindowController,
             headerContainer.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 14),
             headerContainer.heightAnchor.constraint(equalToConstant: 28),
 
-            titleLabel.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            countLabel.leadingAnchor.constraint(equalTo: headerContainer.leadingAnchor),
+            countLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
 
-            countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
-            countLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
-
-            searchField.leadingAnchor.constraint(equalTo: countLabel.trailingAnchor, constant: 16),
+            searchField.leadingAnchor.constraint(equalTo: countLabel.trailingAnchor, constant: 12),
             searchField.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 240),
 
+            boardScrollView.leadingAnchor.constraint(equalTo: searchField.trailingAnchor, constant: 14),
+            boardScrollView.trailingAnchor.constraint(equalTo: filterControl.leadingAnchor, constant: -14),
+            boardScrollView.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            boardScrollView.heightAnchor.constraint(equalToConstant: 28),
+
             statusLabel.trailingAnchor.constraint(equalTo: headerContainer.trailingAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            statusLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 240),
 
-            filterControl.trailingAnchor.constraint(
+            favoriteButton.trailingAnchor.constraint(
                 equalTo: statusLabel.leadingAnchor, constant: -14
             ),
+            favoriteButton.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
+            favoriteButton.widthAnchor.constraint(equalToConstant: 34),
+
+            filterControl.trailingAnchor.constraint(equalTo: favoriteButton.leadingAnchor, constant: -8),
             filterControl.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
-            filterControl.leadingAnchor.constraint(
-                greaterThanOrEqualTo: searchField.trailingAnchor, constant: 14
-            ),
 
             scrollView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
@@ -926,6 +1241,371 @@ final class HistoryWindowController: NSWindowController,
         ])
 
         updateHintLabel()
+        rebuildPinboardTabs()
+    }
+
+    // MARK: 收藏板
+
+    private func rebuildPinboardTabs() {
+        guard isWindowLoaded else { return }
+        for view in boardStackView.arrangedSubviews {
+            boardStackView.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        let historyButton = makeBoardButton(
+            title: "最近",
+            color: nil,
+            isSelected: selectedPinboardID == nil,
+            action: #selector(selectHistoryTab(_:))
+        )
+        historyButton.toolTip = "最近复制的剪贴板历史"
+        boardStackView.addArrangedSubview(historyButton)
+
+        for board in pinboards {
+            let button = makeBoardButton(
+                title: board.name,
+                color: board.color,
+                isSelected: selectedPinboardID == board.id,
+                action: #selector(selectPinboardTab(_:))
+            )
+            button.identifier = NSUserInterfaceItemIdentifier(board.id.uuidString)
+            button.toolTip = "打开“\(board.name)”；右键可重命名、改色或删除"
+            button.menu = makePinboardContextMenu(for: board)
+            button.dropHighlightColor = palette.pinboardColor(board.color)
+            button.onAcceptHistoryEntry = { [weak self] entryID in
+                DispatchQueue.main.async { [weak self] in
+                    self?.addDraggedHistoryEntry(entryID, to: board.id)
+                }
+            }
+            boardStackView.addArrangedSubview(button)
+        }
+
+        let addButton = makeBoardButton(
+            title: "",
+            color: nil,
+            isSelected: false,
+            action: #selector(createPinboardFromTab(_:))
+        )
+        addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "新建收藏板")
+        addButton.imagePosition = .imageOnly
+        addButton.toolTip = "新建收藏板"
+        boardStackView.addArrangedSubview(addButton)
+    }
+
+    private func makeBoardButton(
+        title: String,
+        color: PinboardColor?,
+        isSelected: Bool,
+        action: Selector
+    ) -> PinboardTabButton {
+        let button = PinboardTabButton(title: title, target: self, action: action)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        if let color {
+            let resolvedColor = palette.pinboardColor(color)
+            button.image = Self.pinboardColorDot(resolvedColor)
+            button.imagePosition = .imageLeading
+            button.applyStyle(palette: palette, selected: isSelected, tint: resolvedColor)
+        } else {
+            button.applyStyle(palette: palette, selected: isSelected, tint: nil)
+        }
+        return button
+    }
+
+    private static func pinboardColorDot(_ color: NSColor, diameter: CGFloat = 9) -> NSImage {
+        let image = NSImage(size: NSSize(width: diameter, height: diameter))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(
+            x: 0.5, y: 0.5,
+            width: diameter - 1, height: diameter - 1
+        )).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
+
+    private func addDraggedHistoryEntry(_ entryID: UUID, to boardID: UUID) {
+        guard let entry = historyEntries.first(where: { $0.id == entryID }),
+              let board = pinboards.first(where: { $0.id == boardID }) else { return }
+        let alreadyContainsEntry = board.entries.contains { $0.payload == entry.payload }
+        onAddToPinboard?(entry, boardID)
+        statusLabel.stringValue = alreadyContainsEntry
+            ? "这项内容已在“\(board.name)”中"
+            : "已收藏到“\(board.name)”"
+        statusLabel.textColor = palette.accent
+    }
+
+    private func makePinboardContextMenu(for board: Pinboard) -> NSMenu {
+        let menu = NSMenu()
+
+        let renameItem = NSMenuItem(
+            title: "重命名…",
+            action: #selector(renamePinboardFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        renameItem.target = self
+        renameItem.representedObject = board.id.uuidString
+        menu.addItem(renameItem)
+
+        let colorItem = NSMenuItem(title: "颜色", action: nil, keyEquivalent: "")
+        let colorMenu = NSMenu()
+        for color in PinboardColor.allCases {
+            let item = NSMenuItem(
+                title: color.displayName,
+                action: #selector(changePinboardColorFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.image = Self.pinboardColorDot(palette.pinboardColor(color))
+            item.state = board.color == color ? .on : .off
+            item.representedObject = "\(board.id.uuidString)|\(color.rawValue)"
+            colorMenu.addItem(item)
+        }
+        colorItem.submenu = colorMenu
+        menu.addItem(colorItem)
+        menu.addItem(.separator())
+
+        let deleteItem = NSMenuItem(
+            title: "删除收藏板…",
+            action: #selector(deletePinboardFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        deleteItem.target = self
+        deleteItem.representedObject = board.id.uuidString
+        menu.addItem(deleteItem)
+        return menu
+    }
+
+    @objc private func selectHistoryTab(_ sender: NSButton) {
+        switchSource(to: nil)
+    }
+
+    @objc private func selectPinboardTab(_ sender: NSButton) {
+        guard let rawID = sender.identifier?.rawValue, let id = UUID(uuidString: rawID) else { return }
+        switchSource(to: id)
+    }
+
+    private func switchSource(to pinboardID: UUID?) {
+        // 切换数据源后原预览指向的条目可能已不在列表中，先结束预览会话再重建状态。
+        endPreviewSession(restoreBrowsingFocus: false)
+        selectedPinboardID = pinboardID
+        if let pinboardID,
+           let board = pinboards.first(where: { $0.id == pinboardID }) {
+            allEntries = board.entries
+            searchField.placeholderString = "在“\(board.name)”中搜索"
+        } else {
+            selectedPinboardID = nil
+            allEntries = historyEntries
+            searchField.placeholderString = "搜索剪贴板历史"
+        }
+        query = ""
+        searchField.stringValue = ""
+        typeFilter = .all
+        filterControl.selectedSegment = 0
+        selectedIndex = 0
+        rebuildPinboardTabs()
+        refilter(fallbackIndex: 0)
+        focusCollectionView()
+    }
+
+    @objc private func createPinboardFromTab(_ sender: NSButton) {
+        promptToCreatePinboard(adding: nil)
+    }
+
+    private func promptToCreatePinboard(adding entry: ClipboardEntry?) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "新建收藏板"
+        alert.informativeText = "收藏板用于长期保存常用文本、命令、图片或文件。"
+        alert.addButton(withTitle: "创建")
+        alert.addButton(withTitle: "取消")
+
+        let nameField = NSTextField(string: "")
+        nameField.placeholderString = "名称，例如：常用命令"
+        // leading 对齐的 stack 不会拉伸子视图；输入框必须显式给宽度，
+        // 否则空串 + 占位符的固有尺寸会让它塌缩成几乎不可见的一条缝。
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        nameField.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        // 颜色直接点选色点，选中项带描边圈，比弹出菜单更直观。
+        let colorPicker = PinboardColorPickerView(
+            colors: PinboardColor.allCases.map { palette.pinboardColor($0) },
+            names: PinboardColor.allCases.map(\.displayName)
+        )
+        colorPicker.select(index: pinboards.count % PinboardColor.allCases.count)
+
+        let form = NSStackView(views: [nameField, colorPicker])
+        form.orientation = .vertical
+        form.alignment = .leading
+        form.spacing = 10
+        form.frame = NSRect(x: 0, y: 0, width: 280, height: 62)
+        alert.accessoryView = form
+        alert.window.initialFirstResponder = nameField
+
+        alert.beginSheetModal(for: window) { [weak self, weak nameField, weak colorPicker] response in
+            guard response == .alertFirstButtonReturn,
+                  let self,
+                  let name = nameField?.stringValue,
+                  let selectedIndex = colorPicker?.selectedIndex,
+                  PinboardColor.allCases.indices.contains(selectedIndex) else {
+                return
+            }
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.statusLabel.stringValue = "收藏板名称不能为空"
+                self.statusLabel.textColor = .systemOrange
+                NSSound.beep()
+                DispatchQueue.main.async { [weak self] in
+                    self?.promptToCreatePinboard(adding: entry)
+                }
+                return
+            }
+            guard let board = self.onCreatePinboard?(
+                name,
+                PinboardColor.allCases[selectedIndex]
+            ) else { return }
+            if let entry {
+                self.onAddToPinboard?(entry, board.id)
+                self.statusLabel.stringValue = "已收藏到“\(board.name)”"
+                self.statusLabel.textColor = self.palette.accent
+            } else {
+                self.switchSource(to: board.id)
+            }
+        }
+    }
+
+    @objc private func renamePinboardFromMenu(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              let window else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "重命名收藏板"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "取消")
+        let nameField = NSTextField(string: board.name)
+        nameField.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = nameField
+        alert.window.initialFirstResponder = nameField
+        alert.beginSheetModal(for: window) { [weak self, weak nameField] response in
+            guard response == .alertFirstButtonReturn,
+                  let name = nameField?.stringValue else { return }
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self?.statusLabel.stringValue = "收藏板名称不能为空"
+                self?.statusLabel.textColor = .systemOrange
+                NSSound.beep()
+                return
+            }
+            self?.onRenamePinboard?(id, name)
+        }
+    }
+
+    @objc private func changePinboardColorFromMenu(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String else { return }
+        let parts = rawValue.split(separator: "|", maxSplits: 1).map(String.init)
+        guard parts.count == 2,
+              let id = UUID(uuidString: parts[0]),
+              let color = PinboardColor(rawValue: parts[1]) else { return }
+        onSetPinboardColor?(id, color)
+    }
+
+    @objc private func deletePinboardFromMenu(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "删除收藏板“\(board.name)”？"
+        alert.informativeText = "其中的 \(board.entries.count) 项收藏会一并删除，此操作无法撤销。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "删除")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.onDeletePinboard?(id)
+        }
+    }
+
+    @objc private func showFavoriteMenu(_ sender: NSButton) {
+        guard selectedPinboardID == nil else {
+            // 收藏板内的内容已在收藏板中，再次收藏没有意义。
+            NSSound.beep()
+            return
+        }
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
+        let entry = visibleEntries[selectedIndex]
+        guard !pinboards.isEmpty else {
+            promptToCreatePinboard(adding: entry)
+            return
+        }
+
+        let menu = NSMenu()
+        // 菜单标题让用户明确这个动作是"收藏到某块板"，而不是凭空出现的列表。
+        let header = NSMenuItem(title: "收藏到收藏板", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(
+            string: "收藏到收藏板",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        menu.addItem(header)
+        for board in pinboards {
+            let item = NSMenuItem(
+                title: board.name,
+                action: #selector(addSelectionToPinboard(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.image = Self.pinboardColorDot(palette.pinboardColor(board.color))
+            item.representedObject = board.id.uuidString
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let createItem = NSMenuItem(
+            title: "新建收藏板…",
+            action: #selector(createPinboardForSelection(_:)),
+            keyEquivalent: ""
+        )
+        createItem.target = self
+        menu.addItem(createItem)
+        // 优先把菜单放在选中卡片下方，让“收藏”这个动作和它的目标内容在视觉上连在一起；
+        // 卡片不可见时（例如键盘触发后列表未布局）才退回按钮位置。
+        collectionView.layoutSubtreeIfNeeded()
+        if let cardView = collectionView.item(at: selectedIndex)?.view {
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: cardView.bounds.height + 4),
+                in: cardView
+            )
+        } else {
+            menu.popUp(
+                positioning: nil,
+                at: NSPoint(x: 0, y: sender.bounds.height + 3),
+                in: sender
+            )
+        }
+    }
+
+    @objc private func addSelectionToPinboard(_ sender: NSMenuItem) {
+        guard let rawID = sender.representedObject as? String,
+              let id = UUID(uuidString: rawID),
+              let board = pinboards.first(where: { $0.id == id }),
+              visibleEntries.indices.contains(selectedIndex) else { return }
+        let entry = visibleEntries[selectedIndex]
+        let alreadyContainsEntry = board.entries.contains { $0.payload == entry.payload }
+        onAddToPinboard?(entry, id)
+        statusLabel.stringValue = alreadyContainsEntry
+            ? "这项内容已在“\(board.name)”中"
+            : "已收藏到“\(board.name)”"
+        statusLabel.textColor = palette.accent
+    }
+
+    @objc private func createPinboardForSelection(_ sender: NSMenuItem) {
+        guard visibleEntries.indices.contains(selectedIndex) else { return }
+        promptToCreatePinboard(adding: visibleEntries[selectedIndex])
     }
 
     // MARK: 布局与定位
@@ -952,7 +1632,16 @@ final class HistoryWindowController: NSWindowController,
     }
 
     func windowDidResize(_ notification: Notification) {
+        if let panel = notification.object as? QLPreviewPanel {
+            positionQuickLookPanel(panel)
+            return
+        }
         updateContentInsets()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let panel = notification.object as? QLPreviewPanel else { return }
+        positionQuickLookPanel(panel)
     }
 
     // MARK: 过滤
@@ -993,6 +1682,12 @@ final class HistoryWindowController: NSWindowController,
         } else {
             statusLabel.stringValue = ""
         }
+        if visibleEntries.isEmpty {
+            closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        } else {
+            syncPreviewWithSelection()
+        }
     }
 
     private func updateHeaderState() {
@@ -1001,8 +1696,13 @@ final class HistoryWindowController: NSWindowController,
             ? "匹配 \(visibleEntries.count) / \(allEntries.count)"
             : "\(allEntries.count) 项"
 
+        // 按钮常驻避免布局跳动；收藏板视图下没有可收藏的对象，置灰即可。
+        favoriteButton.isEnabled = selectedPinboardID == nil && !visibleEntries.isEmpty
+
         if allEntries.isEmpty {
-            emptyLabel.stringValue = "还没有记录 · 先复制一些文本、图片或文件"
+            emptyLabel.stringValue = selectedPinboardID == nil
+                ? "还没有记录 · 先复制一些文本、图片或文件"
+                : "这个收藏板还是空的 · 回到“最近”选择内容并收藏"
             emptyLabel.isHidden = false
         } else if visibleEntries.isEmpty {
             emptyLabel.stringValue = query.isEmpty
@@ -1016,11 +1716,22 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func updateHintLabel() {
-        if isSearchFieldFocused {
-            let escapeHint = query.isEmpty ? "Esc 关闭" : "Esc 清除搜索"
-            hintLabel.stringValue = "输入筛选 · Tab 返回浏览 · 空格 预览 · ⏎ 粘贴 · \(escapeHint)"
+        let search = shortcutStore.displayString(for: .toggleSearchFocus)
+        let preview = shortcutStore.displayString(for: .toggleQuickLook)
+        let paste = shortcutStore.displayString(for: .pasteSelection)
+        let close = shortcutStore.displayString(for: .clearSearchOrClose)
+        let favorite = shortcutStore.displayString(for: .addToPinboard)
+        let delete = shortcutStore.displayString(for: .deleteSelection)
+        let isFiltering = !query.isEmpty || typeFilter != .all
+        if selectedPinboardID != nil, isFiltering, !isSearchFieldFocused {
+            hintLabel.stringValue = "当前正在筛选 · 清除搜索并选择“全部”后可拖动调整顺序"
+        } else if isSearchFieldFocused {
+            let closeHint = query.isEmpty ? "\(close) 关闭" : "\(close) 清除搜索"
+            hintLabel.stringValue = "输入筛选 · \(search) 返回浏览 · \(preview) 预览 · \(paste) 粘贴 · \(closeHint)"
+        } else if selectedPinboardID != nil {
+            hintLabel.stringValue = "单击复制 · \(preview) 预览 · \(search) 搜索 · \(delete) 移出 · \(paste) 粘贴 · \(close) 关闭"
         } else {
-            hintLabel.stringValue = "单击选择并复制 · 双击粘贴 · 空格预览 · Tab 搜索 · ⌘P 置顶 · ⌘⌫ 删除 · Esc 关闭"
+            hintLabel.stringValue = "单击复制 · \(preview) 预览 · \(search) 搜索 · \(favorite) 收藏 · \(paste) 粘贴 · \(close) 关闭"
         }
     }
 
@@ -1053,17 +1764,108 @@ final class HistoryWindowController: NSWindowController,
         window?.makeFirstResponder(searchField)
         updateHintLabel()
     }
-    // MARK: QuickLook 预览
+    // MARK: 自适应预览与 Quick Look
+
+    private var isAdaptivePreviewVisible: Bool {
+        adaptivePreviewController.isVisible
+    }
 
     private var isQuickLookVisible: Bool {
         QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared()?.isVisible == true
     }
 
-    private func toggleQuickLook() {
-        if isQuickLookVisible {
-            closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+    private func togglePreview() {
+        if isPreviewSessionActive {
+            endPreviewSession(restoreBrowsingFocus: true)
             return
         }
+
+        isPreviewSessionActive = true
+        if showAdaptivePreviewIfSupported() {
+            return
+        }
+        // 文件不提供预览：Quick Look 对多数文件只展示图标，价值低，
+        // 而且面板尺寸异步重算会产生明显闪动。会话保持开启，
+        // 继续按方向键切到文本/图片时会恢复预览。
+        statusLabel.stringValue = "文件没有预览 · 双击直接粘贴"
+        statusLabel.textColor = palette.textSecondary
+    }
+
+    /// 结束预览会话：Space/Esc 显式关闭、窗口收起或切换数据源时调用。
+    /// 会话结束后方向键浏览不再自动恢复预览。
+    private func endPreviewSession(restoreBrowsingFocus: Bool) {
+        isPreviewSessionActive = false
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        if restoreBrowsingFocus {
+            window?.makeKeyAndOrderFront(nil)
+            focusCollectionView()
+        }
+    }
+
+    private func showAdaptivePreviewIfSupported() -> Bool {
+        guard visibleEntries.indices.contains(selectedIndex) else { return false }
+        guard AdaptivePreviewController.supports(entry: visibleEntries[selectedIndex]) else {
+            return false
+        }
+        collectionView.layoutSubtreeIfNeeded()
+        guard let itemView = collectionView.item(at: selectedIndex)?.view else { return false }
+
+        // 快速连续切换时也只允许一种预览存在。顺序很关键：必须先弹气泡再关
+        // Quick Look——先关会让 QLPreviewPanel 在 popover.show 时复活（实测确认）。
+        let didShow = adaptivePreviewController.show(
+            entry: visibleEntries[selectedIndex],
+            relativeTo: itemView,
+            palette: palette
+        ) { [weak self] in
+            guard let self else { return }
+            self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            self.showQuickLook()
+        }
+        if didShow {
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        }
+        return didShow
+    }
+
+    /// 选择变化后让预览跟随当前条目：会话内文本/图片保持轻量气泡；文件不提供预览，
+    /// 选中文件时只暂时关闭预览，会话保持，切回文本/图片自动恢复。锚点未就绪时有限重试。
+    private func syncPreviewWithSelection(retriesRemaining: Int = 3) {
+        guard isPreviewSessionActive else { return }
+        // scrollToItems 的布局在当前事件尾部才稳定；等布局完成后再换锚点。
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.window?.isVisible == true,
+                  self.visibleEntries.indices.contains(self.selectedIndex) else { return }
+            let entry = self.visibleEntries[self.selectedIndex]
+
+            if AdaptivePreviewController.supports(entry: entry) {
+                // showAdaptivePreviewIfSupported 内部会先弹气泡再关掉 Quick Look。
+                if !self.showAdaptivePreviewIfSupported(), retriesRemaining > 0 {
+                    // 快速切换时新卡片可能尚未滚动到位、锚点视图还没生成，稍后重试。
+                    self.syncPreviewWithSelection(retriesRemaining: retriesRemaining - 1)
+                }
+                return
+            }
+
+            // 文件没有预览：关掉当前预览即可。
+            self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            self.closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        }
+    }
+
+    private func closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: Bool) {
+        if isAdaptivePreviewVisible {
+            adaptivePreviewController.close()
+        }
+        if restoreBrowsingFocus {
+            window?.makeKeyAndOrderFront(nil)
+            focusCollectionView()
+        }
+    }
+
+    private func showQuickLook() {
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
         guard prepareQuickLookPreview(), let panel = QLPreviewPanel.shared() else {
             NSSound.beep()
             return
@@ -1071,12 +1873,36 @@ final class HistoryWindowController: NSWindowController,
         panel.dataSource = self
         panel.delegate = self
         panel.reloadData()
+        positionQuickLookPanel(panel)
         panel.makeKeyAndOrderFront(nil)
+        // Quick Look 内容异步载入后可能重算窗口尺寸，再约束一次目标屏幕。
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let self, let panel, panel.isVisible else { return }
+            self.positionQuickLookPanel(panel)
+        }
+    }
+
+    private func positionQuickLookPanel(_ panel: QLPreviewPanel) {
+        guard !isPositioningQuickLookPanel else { return }
+        collectionView.layoutSubtreeIfNeeded()
+        let selectedItemScreen = collectionView.item(at: selectedIndex)?.view.window?.screen
+        guard let screen = selectedItemScreen ?? window?.screen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let targetFrame = AdaptivePreviewSizing.centeredQuickLookFrame(
+            panelSize: panel.frame.size,
+            visibleFrame: visibleFrame
+        )
+        guard !panel.frame.approximatelyEquals(targetFrame) else { return }
+        isPositioningQuickLookPanel = true
+        panel.setFrame(targetFrame, display: false)
+        isPositioningQuickLookPanel = false
     }
 
     private func closeQuickLookIfNeeded(restoreBrowsingFocus: Bool) {
         if QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() {
-            if panel.isVisible { panel.orderOut(nil) }
+            // QLPreviewPanel 不吃 orderOut（isVisible 不变），close 才会真正关闭。
+            if panel.isVisible { panel.close() }
             panel.dataSource = nil
             panel.delegate = nil
         }
@@ -1098,12 +1924,10 @@ final class HistoryWindowController: NSWindowController,
         cleanupQuickLookTempFiles()
         let entry = visibleEntries[selectedIndex]
         switch entry.payload {
-        case .files(let paths):
-            guard let path = paths.first, FileManager.default.fileExists(atPath: path) else {
-                quickLookPreviewURL = nil
-                return false
-            }
-            quickLookPreviewURL = URL(fileURLWithPath: path)
+        case .files:
+            // 文件不提供预览，不会进入 Quick Look。
+            quickLookPreviewURL = nil
+            return false
         case .image(let data, let pasteboardType):
             let ext = pasteboardType == NSPasteboard.PasteboardType.tiff.rawValue ? "tiff" : "png"
             quickLookPreviewURL = writeQuickLookTemp(
@@ -1180,6 +2004,7 @@ final class HistoryWindowController: NSWindowController,
         collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
         suppressSelectionCallback = false
         chooseEntry(at: index)
+        syncPreviewWithSelection()
     }
 
     private func chooseEntry(at index: Int) {
@@ -1193,7 +2018,7 @@ final class HistoryWindowController: NSWindowController,
     private func confirmAndPaste() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
         onChoose?(visibleEntries[selectedIndex])
-        let result = onPaste?(previousApplication) ?? .targetUnavailable
+        let result = onPaste?(pasteTargetApplication) ?? .targetUnavailable
         switch result {
         case .started:
             dismiss(restorePreviousApplication: false)
@@ -1237,10 +2062,20 @@ final class HistoryWindowController: NSWindowController,
 
     private func deleteSelection() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
-        onDelete?(visibleEntries[selectedIndex])
+        let entry = visibleEntries[selectedIndex]
+        if let selectedPinboardID {
+            onRemoveFromPinboard?(entry, selectedPinboardID)
+        } else {
+            onDelete?(entry)
+        }
     }
 
     private func togglePinSelection() {
+        // 收藏板内顺序由拖动排序管理，置顶没有语义；给出可感知反馈而不是静默吞键。
+        guard selectedPinboardID == nil else {
+            NSSound.beep()
+            return
+        }
         guard visibleEntries.indices.contains(selectedIndex) else { return }
         onTogglePin?(visibleEntries[selectedIndex])
     }
@@ -1261,6 +2096,69 @@ final class HistoryWindowController: NSWindowController,
         query = demoQuery
         refilter(fallbackIndex: 0)
         focusSearchField()
+    }
+
+    /// 开发用：直接选中演示记录并打开预览，便于自动截图检查不同内容尺寸。
+    func showDemoPreview(at index: Int) {
+        guard visibleEntries.indices.contains(index) else { return }
+        selectAndChoose(index: index, notifyWhenUnchanged: true)
+        togglePreview()
+    }
+
+    func applyDemoPinboard(at index: Int) {
+        guard pinboards.indices.contains(index) else { return }
+        switchSource(to: pinboards[index].id)
+    }
+
+    /// 开发用：验证预览会话——文本开预览 → 右移到文件（预览暂关、会话保持）
+    /// → 左移回文本（预览自动恢复）。
+    func runDemoPreviewSession(textIndex: Int, logURL: URL) {
+        guard visibleEntries.indices.contains(textIndex),
+              visibleEntries.indices.contains(textIndex + 1) else { return }
+        var lines: [String] = []
+        selectAndChoose(index: textIndex, notifyWhenUnchanged: true)
+        togglePreview()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            lines.append("open text: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+            self.moveSelection(by: 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self else { return }
+                lines.append("-> file: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+                self.moveSelection(by: -1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self else { return }
+                    lines.append("-> text: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+                    try? lines.joined(separator: "\n").write(to: logURL, atomically: true, encoding: .utf8)
+                }
+            }
+        }
+    }
+
+    /// 开发用：直接弹出新建收藏板 sheet，验证表单布局（名称输入框 + 色点行）。
+    func showDemoNewPinboardSheet() {
+        promptToCreatePinboard(adding: nil)
+    }
+
+    /// 开发用：直接渲染浮窗内容，避免多屏坐标和窗口共享策略影响自动截图。
+    @discardableResult
+    func writeDemoSnapshot(to url: URL) -> Bool {
+        guard let contentView = window?.contentView else { return false }
+        contentView.layoutSubtreeIfNeeded()
+        guard let representation = contentView.bitmapImageRepForCachingDisplay(
+            in: contentView.bounds
+        ) else { return false }
+        contentView.cacheDisplay(in: contentView.bounds, to: representation)
+        guard let data = representation.representation(using: .png, properties: [:]) else {
+            return false
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            NSLog("cpsmart could not write demo snapshot: %@", error.localizedDescription)
+            return false
+        }
     }
     #endif
 
@@ -1284,21 +2182,25 @@ final class HistoryWindowController: NSWindowController,
     private func dismiss(restorePreviousApplication: Bool) {
         guard let window, window.isVisible, !isDismissing else { return }
         isDismissing = true
+        dismissalGeneration += 1
+        let generation = dismissalGeneration
         removeKeyboardMonitor()
-        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        endPreviewSession(restoreBrowsingFocus: false)
         thumbnailProvider.cancelAll()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Theme.exitDuration
             window.animator().alphaValue = 0
         }, completionHandler: { [weak self, weak window] in
             guard let self else { return }
+            // 动画期间若被重新唤起，此回调已作废，不能隐藏新窗口。
+            guard generation == self.dismissalGeneration else { return }
             window?.orderOut(nil)
             window?.alphaValue = 1
             self.isDismissing = false
             if restorePreviousApplication,
-               let previousApplication = self.previousApplication,
-               previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                previousApplication.activate(options: [.activateIgnoringOtherApps])
+               let targetApplication = self.pasteTargetApplication,
+               targetApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                targetApplication.activate(options: [.activateIgnoringOtherApps])
             }
             self.previousApplication = nil
         })
@@ -1350,87 +2252,114 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
-        if isQuickLookVisible {
-            switch event.keyCode {
-            case 49, 53:
+        // 浮窗上挂着 sheet（新建/重命名收藏板等）时，键盘属于 sheet 的输入框，
+        // 不能按历史窗口的快捷键逻辑拦截，否则名称根本无法输入。
+        if window?.attachedSheet != nil { return false }
+
+        if isAdaptivePreviewVisible {
+            // 与 Quick Look 使用同一组上下文，确保自定义快捷键在轻量预览中同样生效。
+            switch shortcutMatcher.action(for: event, context: .quickLook) {
+            case .toggleQuickLook, .clearSearchOrClose:
                 if !event.isARepeat {
-                    closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+                    endPreviewSession(restoreBrowsingFocus: true)
                 }
-            case 123, 124:
-                let offset = event.keyCode == 123 ? -1 : 1
-                moveSelection(by: offset)
-                if prepareQuickLookPreview() {
-                    QLPreviewPanel.shared()?.reloadData()
+                return true
+            case .selectPrevious:
+                moveSelection(by: -1)
+                return true
+            case .selectNext:
+                moveSelection(by: 1)
+                return true
+            default:
+                // 允许 ⌘C 等文本选择相关快捷键继续交给只读预览文本。
+                return false
+            }
+        }
+
+        if isQuickLookVisible {
+            switch shortcutMatcher.action(for: event, context: .quickLook) {
+            case .toggleQuickLook, .clearSearchOrClose:
+                if !event.isARepeat {
+                    endPreviewSession(restoreBrowsingFocus: true)
                 }
+            case .selectPrevious:
+                // moveSelection 内部已经同步预览；不要再调一次 syncPreviewWithSelection——
+                // 重复执行会让气泡重弹，把正在关闭的 Quick Look 面板复活。
+                moveSelection(by: -1)
+            case .selectNext:
+                moveSelection(by: 1)
             default:
                 break
             }
             return true
         }
 
-        // ⌘1–⌘4 切换类型筛选
-        if event.modifierFlags.contains(.command), (18...21).contains(event.keyCode) {
-            filterControl.selectedSegment = Int(event.keyCode) - 18
-            filterChanged(filterControl)
-            return true
+        let context: ShortcutContext
+        if isComposingSearchText {
+            context = .composingSearchText
+        } else if isSearchFieldFocused {
+            context = .searching
+        } else {
+            context = .browsing
         }
 
-        // ⌘P 切换置顶
-        if event.modifierFlags.contains(.command), event.keyCode == 35 {
-            togglePinSelection()
-            return true
-        }
-
-        // 输入法存在组合文本时，候选选择、确认和取消都交还给系统文本输入。
-        if isComposingSearchText, !event.modifierFlags.contains(.command) {
+        guard let action = shortcutMatcher.action(for: event, context: context) else {
+            if context == .browsing, isPrintableTextInput(event) {
+                // 浏览态必须先使用配置的搜索快捷键，避免无意按键改变筛选结果。
+                return true
+            }
             return false
         }
 
-        switch event.keyCode {
-        case 123:
-            if isSearchFieldFocused { return false }
+        switch action {
+        case .selectPrevious:
             moveSelection(by: -1)
-        case 124:
-            if isSearchFieldFocused { return false }
+        case .selectNext:
             moveSelection(by: 1)
-        case 48:
+        case .toggleSearchFocus:
             if isSearchFieldFocused {
                 focusCollectionView()
             } else {
                 focusSearchField()
             }
-        case 36, 76:
+        case .pasteSelection:
             confirmAndPaste()
-        case 49:
+        case .toggleQuickLook:
             if !event.isARepeat {
-                toggleQuickLook()
+                togglePreview()
             }
-        case 51, 117:
-            // 删除统一走 ⌘⌫（同 Finder）：搜索时退格要留给文本编辑，
-            // 连按退格清空搜索词后若继续删记录容易误删
-            if event.modifierFlags.contains(.command) {
-                deleteSelection()
-            } else {
-                if !isSearchFieldFocused {
-                    focusSearchField()
-                }
-                return false
-            }
-        case 53:
-            // Esc 优先清除搜索，再按一次才关闭
-            if !query.isEmpty {
+        case .togglePin:
+            togglePinSelection()
+        case .addToPinboard:
+            showFavoriteMenu(favoriteButton)
+        case .deleteSelection:
+            deleteSelection()
+        case .filterAll:
+            applyFilterShortcut(segment: 0)
+        case .filterText:
+            applyFilterShortcut(segment: 1)
+        case .filterImage:
+            applyFilterShortcut(segment: 2)
+        case .filterFiles:
+            applyFilterShortcut(segment: 3)
+        case .clearSearchOrClose:
+            if isPreviewSessionActive {
+                // 会话内选中文件时没有可见预览，Esc 仍应先结束预览会话。
+                endPreviewSession(restoreBrowsingFocus: true)
+            } else if !query.isEmpty {
                 clearSearch()
             } else {
                 dismiss(restorePreviousApplication: true)
             }
-        default:
-            if !isSearchFieldFocused, isPrintableTextInput(event) {
-                // 浏览态必须先按 Tab 才能搜索，避免无意按键改变筛选结果。
-                return true
-            }
+        case .toggleHistory:
             return false
         }
         return true
+    }
+
+    private func applyFilterShortcut(segment: Int) {
+        filterControl.selectedSegment = segment
+        filterChanged(filterControl)
     }
 
     private func isPrintableTextInput(_ event: NSEvent) -> Bool {
@@ -1472,8 +2401,9 @@ final class HistoryWindowController: NSWindowController,
             withIdentifier: Self.itemIdentifier,
             for: indexPath
         ) as! HistoryCollectionItem
+        let representedEntry = visibleEntries[indexPath.item]
         item.configure(
-            with: visibleEntries[indexPath.item],
+            with: representedEntry,
             thumbnails: thumbnailProvider,
             palette: palette
         )
@@ -1485,7 +2415,105 @@ final class HistoryWindowController: NSWindowController,
                 self.confirmAndPaste()
             }
         }
+        item.onDrag = { [weak self] event, sourceView in
+            self?.beginCardDrag(entry: representedEntry, event: event, sourceView: sourceView)
+        }
         return item
+    }
+
+    private func beginCardDrag(entry: ClipboardEntry, event: NSEvent, sourceView: NSView) {
+        if selectedPinboardID != nil, (!query.isEmpty || typeFilter != .all) {
+            NSSound.beep()
+            statusLabel.stringValue = "清除搜索并选择“全部”后可调整收藏顺序"
+            statusLabel.textColor = .systemOrange
+            return
+        }
+
+        let descriptor = PinboardDragDescriptor(
+            entryID: entry.id,
+            sourcePinboardID: selectedPinboardID
+        )
+        let draggingItem = NSDraggingItem(pasteboardWriter: descriptor.pasteboardItem())
+        let frame = sourceView.convert(sourceView.bounds, to: collectionView)
+        draggingItem.setDraggingFrame(frame, contents: snapshotImage(of: sourceView))
+        let session = collectionView.beginDraggingSession(
+            with: [draggingItem],
+            event: event,
+            source: self
+        )
+        session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+
+    private func snapshotImage(of view: NSView) -> NSImage {
+        guard let representation = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            return NSImage(size: view.bounds.size)
+        }
+        view.cacheDisplay(in: view.bounds, to: representation)
+        let image = NSImage(size: view.bounds.size)
+        image.addRepresentation(representation)
+        return image
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        selectedPinboardID == nil ? .copy : .move
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        canDragItemsAt indexPaths: Set<IndexPath>,
+        with event: NSEvent
+    ) -> Bool {
+        guard indexPaths.count == 1,
+              let indexPath = indexPaths.first,
+              visibleEntries.indices.contains(indexPath.item) else { return false }
+        if selectedPinboardID != nil {
+            return query.isEmpty && typeFilter == .all
+        }
+        return true
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        pasteboardWriterForItemAt indexPath: IndexPath
+    ) -> NSPasteboardWriting? {
+        guard visibleEntries.indices.contains(indexPath.item) else { return nil }
+        return PinboardDragDescriptor(
+            entryID: visibleEntries[indexPath.item].id,
+            sourcePinboardID: selectedPinboardID
+        ).pasteboardItem()
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        validateDrop draggingInfo: NSDraggingInfo,
+        proposedIndexPath proposedDropIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>,
+        dropOperation proposedDropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>
+    ) -> NSDragOperation {
+        guard query.isEmpty,
+              typeFilter == .all,
+              let boardID = selectedPinboardID,
+              let descriptor = PinboardDragDescriptor.read(from: draggingInfo.draggingPasteboard),
+              descriptor.sourcePinboardID == boardID else { return [] }
+        proposedDropOperation.pointee = .before
+        return .move
+    }
+
+    func collectionView(
+        _ collectionView: NSCollectionView,
+        acceptDrop draggingInfo: NSDraggingInfo,
+        indexPath: IndexPath,
+        dropOperation: NSCollectionView.DropOperation
+    ) -> Bool {
+        guard query.isEmpty,
+              typeFilter == .all,
+              let boardID = selectedPinboardID,
+              let descriptor = PinboardDragDescriptor.read(from: draggingInfo.draggingPasteboard),
+              descriptor.sourcePinboardID == boardID else { return false }
+        onMovePinboardEntry?(descriptor.entryID, boardID, indexPath.item)
+        return true
     }
 
     func collectionView(
@@ -1495,5 +2523,6 @@ final class HistoryWindowController: NSWindowController,
         guard !suppressSelectionCallback, let indexPath = indexPaths.first else { return }
         selectedIndex = indexPath.item
         chooseEntry(at: indexPath.item)
+        syncPreviewWithSelection()
     }
 }

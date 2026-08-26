@@ -1,39 +1,54 @@
 import AppKit
+import Carbon
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let store = HistoryStore()
+    private let pinboardStore = PinboardStore()
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
-    private let historyWindow = HistoryWindowController()
-    private let aboutWindow = AboutWindowController()
+    private let shortcutStore = ShortcutStore()
+    private lazy var historyWindow = HistoryWindowController(shortcutStore: shortcutStore)
+    private lazy var aboutWindow = AboutWindowController(shortcutStore: shortcutStore)
+    private lazy var shortcutSettingsWindow = ShortcutSettingsWindowController(
+        shortcutStore: shortcutStore
+    )
     private var hotKey: GlobalHotKey?
+    private var shouldRegisterGlobalHotKey = true
+    private var isRecordingShortcut = false
     private var statusItem: NSStatusItem!
+    private var openHistoryMenuItem: NSMenuItem!
     private var pauseMenuItem: NSMenuItem!
     private var loginMenuItem: NSMenuItem!
     private var appearanceMenuItem: NSMenuItem!
+
+    #if DEBUG
+    private var demoPinboardStore: PinboardStore?
+    private var demoPinboardFileURL: URL?
+    #endif
+
+    private var activePinboardStore: PinboardStore {
+        #if DEBUG
+        if let demoPinboardStore { return demoPinboardStore }
+        #endif
+        return pinboardStore
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         configureApplicationIcon()
         configureHistoryWindow()
+        configureShortcutSettings()
         configureStatusItem()
         configureClipboardMonitor()
 
         // 演示模式（仅 DEBUG）：跳过快捷键注册，避免与正在运行的正式版冲突。
         let isDemoMode = CommandLine.arguments.contains("--demo-data")
+        let shouldShowShortcutSettings = CommandLine.arguments.contains("--show-shortcut-settings")
+        shouldRegisterGlobalHotKey = !isDemoMode
 
         if !isDemoMode {
-            hotKey = GlobalHotKey { [weak self] in
-                self?.showHistory()
-            }
-
-            if hotKey == nil {
-                showAlert(
-                    title: "快捷键注册失败",
-                    message: "⇧⌘V 可能已被其他应用占用。你仍可从菜单栏打开 cpsmart。"
-                )
-            }
+            registerInitialGlobalHotKey()
         }
 
         // Useful for automated UI smoke tests without requiring Accessibility permission.
@@ -47,6 +62,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.aboutWindow.show()
             }
         }
+        if shouldShowShortcutSettings {
+            DispatchQueue.main.async { [weak self] in
+                self?.shortcutSettingsWindow.show()
+            }
+        }
 
         #if DEBUG
         // 开发用：`--demo-data` 用内置演示数据打开浮窗，不读写真实历史，便于截图审查 UI。
@@ -55,15 +75,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             monitor.isPaused = true
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.historyWindow.show(entries: DemoData.makeEntries())
+                guard !shouldShowShortcutSettings else { return }
+                let demoPinboardFileURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "cpsmart-demo-pinboards-\(ProcessInfo.processInfo.processIdentifier).json"
+                    )
+                try? FileManager.default.removeItem(at: demoPinboardFileURL)
+                self.demoPinboardFileURL = demoPinboardFileURL
+                self.demoPinboardStore = PinboardStore(
+                    fileURL: demoPinboardFileURL,
+                    initialBoards: DemoData.makePinboards()
+                )
+                self.historyWindow.show(
+                    entries: DemoData.makeEntries(),
+                    pinboards: self.activePinboardStore.boards
+                )
                 if CommandLine.arguments.contains("--demo-light") {
                     self.historyWindow.applyAppearanceMode(.light)
                 } else if CommandLine.arguments.contains("--demo-dark") {
                     self.historyWindow.applyAppearanceMode(.dark)
                 }
+                if let pinboardIndex = CommandLine.arguments.firstIndex(of: "--demo-pinboard"),
+                   CommandLine.arguments.indices.contains(pinboardIndex + 1),
+                   let index = Int(CommandLine.arguments[pinboardIndex + 1]) {
+                    self.historyWindow.applyDemoPinboard(at: index)
+                }
                 if let queryIndex = CommandLine.arguments.firstIndex(of: "--demo-query"),
                    CommandLine.arguments.indices.contains(queryIndex + 1) {
                     self.historyWindow.applyDemoQuery(CommandLine.arguments[queryIndex + 1])
+                }
+                if let previewIndex = CommandLine.arguments.firstIndex(of: "--demo-preview-index"),
+                   CommandLine.arguments.indices.contains(previewIndex + 1),
+                   let index = Int(CommandLine.arguments[previewIndex + 1]) {
+                    // 等集合视图完成首轮布局，确保选中卡片已经有可用于锚定的 window。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.historyWindow.showDemoPreview(at: index)
+                    }
+                }
+                if let sessionIndex = CommandLine.arguments.firstIndex(of: "--demo-preview-session"),
+                   CommandLine.arguments.indices.contains(sessionIndex + 1),
+                   let index = Int(CommandLine.arguments[sessionIndex + 1]) {
+                    let logURL = URL(fileURLWithPath: "/tmp/cpsmart-preview-session.log")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.historyWindow.runDemoPreviewSession(textIndex: index, logURL: logURL)
+                    }
+                }
+                if CommandLine.arguments.contains("--demo-new-pinboard-sheet") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        self?.historyWindow.showDemoNewPinboardSheet()
+                    }
+                }
+                if let snapshotIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot"),
+                   CommandLine.arguments.indices.contains(snapshotIndex + 1) {
+                    let snapshotURL = URL(
+                        fileURLWithPath: CommandLine.arguments[snapshotIndex + 1]
+                    )
+                    var snapshotDelay = 0.6
+                    if let delayIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot-delay"),
+                       CommandLine.arguments.indices.contains(delayIndex + 1),
+                       let configuredDelay = Double(CommandLine.arguments[delayIndex + 1]) {
+                        snapshotDelay = max(0, configuredDelay)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + snapshotDelay) { [weak self] in
+                        _ = self?.historyWindow.writeDemoSnapshot(to: snapshotURL)
+                    }
                 }
             }
         }
@@ -72,6 +147,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        #if DEBUG
+        if let demoPinboardFileURL {
+            try? FileManager.default.removeItem(at: demoPinboardFileURL)
+        }
+        #endif
     }
 
     private func configureApplicationIcon() {
@@ -115,6 +195,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.store.togglePin(id: entry.id)
             self.historyWindow.refresh(entries: self.store.entries)
         }
+        historyWindow.onCreatePinboard = { [weak self] name, color in
+            guard let self else { return nil }
+            let store = self.activePinboardStore
+            let board = store.create(name: name, color: color)
+            self.historyWindow.refresh(pinboards: store.boards)
+            return board
+        }
+        historyWindow.onRenamePinboard = { [weak self] id, name in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.rename(id: id, to: name)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onSetPinboardColor = { [weak self] id, color in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.setColor(id: id, color: color)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onDeletePinboard = { [weak self] id in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.removeBoard(id: id)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onAddToPinboard = { [weak self] entry, boardID in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.add(entry, to: boardID)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onRemoveFromPinboard = { [weak self] entry, boardID in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.removeEntry(id: entry.id, from: boardID)
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+        historyWindow.onMovePinboardEntry = { [weak self] entryID, boardID, insertionIndex in
+            guard let self else { return }
+            let store = self.activePinboardStore
+            store.moveEntry(
+                id: entryID,
+                toInsertionIndex: insertionIndex,
+                in: boardID
+            )
+            self.historyWindow.refresh(pinboards: store.boards)
+        }
+    }
+
+    private func configureShortcutSettings() {
+        shortcutSettingsWindow.onAttemptChange = { [weak self] action, gesture in
+            self?.attemptShortcutChange(action: action, gesture: gesture)
+        }
+        shortcutSettingsWindow.onAttemptReset = { [weak self] in
+            self?.attemptShortcutReset()
+        }
+        shortcutSettingsWindow.onAttemptResetAction = { [weak self] action in
+            self?.attemptShortcutReset(action: action)
+        }
+        shortcutSettingsWindow.onAttemptSwap = {
+            [weak self] action, conflictingAction, gesture in
+            self?.attemptShortcutSwap(
+                action: action,
+                with: conflictingAction,
+                requestedGesture: gesture
+            )
+        }
+        shortcutSettingsWindow.onRecordingStateChanged = { [weak self] recording in
+            self?.setShortcutRecording(recording)
+        }
     }
 
     private func configureStatusItem() {
@@ -129,11 +279,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(NSMenuItem(
-            title: "打开剪贴板历史（⇧⌘V）",
+        openHistoryMenuItem = NSMenuItem(
+            title: openHistoryMenuTitle,
             action: #selector(showHistoryFromMenu),
             keyEquivalent: ""
-        ))
+        )
+        menu.addItem(openHistoryMenuItem)
         menu.addItem(.separator())
 
         pauseMenuItem = NSMenuItem(
@@ -149,6 +300,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyEquivalent: ""
         )
         menu.addItem(loginMenuItem)
+
+        menu.addItem(NSMenuItem(
+            title: "快捷键设置…",
+            action: #selector(showShortcutSettings),
+            keyEquivalent: ""
+        ))
 
         // 外观：跟随系统 / 浅色 / 深色
         appearanceMenuItem = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
@@ -208,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        openHistoryMenuItem.title = openHistoryMenuTitle
         pauseMenuItem.state = monitor.isPaused ? .on : .off
         loginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
     }
@@ -216,14 +374,169 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let mode = AppearanceMode.allCases[sender.tag]
         AppearanceMode.current = mode
         historyWindow.applyAppearanceMode()
+        shortcutSettingsWindow.applyAppearanceMode()
     }
 
     private func showHistory() {
-        historyWindow.show(entries: store.entries)
+        historyWindow.show(entries: store.entries, pinboards: activePinboardStore.boards)
     }
 
     @objc private func showHistoryFromMenu() {
         showHistory()
+    }
+
+    @objc private func showShortcutSettings() {
+        shortcutSettingsWindow.show()
+    }
+
+    private var openHistoryMenuTitle: String {
+        "打开剪贴板历史（\(shortcutStore.displayString(for: .toggleHistory))）"
+    }
+
+    private func registerInitialGlobalHotKey() {
+        let gesture = shortcutStore.primaryBinding(for: .toggleHistory)
+        hotKey = makeGlobalHotKey(for: gesture)
+        if hotKey == nil {
+            showAlert(
+                title: "快捷键注册失败",
+                message: "\(gesture.displayString) 可能已被系统或其他应用占用。你仍可从菜单栏打开 cpsmart，并在“快捷键设置”中更换。"
+            )
+        }
+    }
+
+    private func makeGlobalHotKey(for gesture: ShortcutGesture) -> GlobalHotKey? {
+        GlobalHotKey(gesture: gesture) { [weak self] in
+            self?.showHistory()
+        }
+    }
+
+    private func attemptShortcutChange(
+        action: ShortcutActionID,
+        gesture: ShortcutGesture
+    ) -> String? {
+        if let issue = shortcutStore.validate(gesture, for: action) {
+            return issue.message
+        }
+
+        if action == .toggleHistory, shouldRegisterGlobalHotKey {
+            if hotKey?.gesture != gesture {
+                guard let candidate = makeGlobalHotKey(for: gesture) else {
+                    return "无法使用 \(gesture.displayString)：该快捷键可能已被系统或其他应用占用。原快捷键仍然有效。"
+                }
+                guard shortcutStore.set(gesture, for: action) == nil else {
+                    return "无法保存该快捷键。"
+                }
+                hotKey = candidate
+                openHistoryMenuItem?.title = openHistoryMenuTitle
+                return nil
+            }
+        }
+
+        if let issue = shortcutStore.set(gesture, for: action) {
+            return issue.message
+        }
+        openHistoryMenuItem?.title = openHistoryMenuTitle
+        return nil
+    }
+
+    private func attemptShortcutReset() -> String? {
+        let defaultGlobal = ShortcutDefaults.bindings[.toggleHistory]!.first!
+        if shouldRegisterGlobalHotKey, hotKey?.gesture != defaultGlobal {
+            guard let candidate = makeGlobalHotKey(for: defaultGlobal) else {
+                return "无法恢复默认：\(defaultGlobal.displayString) 可能已被系统或其他应用占用。当前设置保持不变。"
+            }
+            shortcutStore.resetToDefaults()
+            hotKey = candidate
+        } else {
+            shortcutStore.resetToDefaults()
+        }
+        openHistoryMenuItem?.title = openHistoryMenuTitle
+        return nil
+    }
+
+    private func attemptShortcutReset(action: ShortcutActionID) -> String? {
+        if let issue = shortcutStore.validateReset(for: action) {
+            return "无法恢复默认：\(issue.message)"
+        }
+
+        if action == .toggleHistory, shouldRegisterGlobalHotKey {
+            let defaultGesture = shortcutStore.defaultBindings(for: action).first!
+            guard let candidate = makeGlobalHotKey(for: defaultGesture) else {
+                return "无法恢复默认：\(defaultGesture.displayString) 可能已被系统或其他应用占用。当前设置保持不变。"
+            }
+            guard shortcutStore.resetToDefault(action) == nil else {
+                return "无法恢复该快捷键。"
+            }
+            hotKey = candidate
+        } else if let issue = shortcutStore.resetToDefault(action) {
+            return issue.message
+        }
+
+        openHistoryMenuItem?.title = openHistoryMenuTitle
+        return nil
+    }
+
+    private func attemptShortcutSwap(
+        action: ShortcutActionID,
+        with conflictingAction: ShortcutActionID,
+        requestedGesture: ShortcutGesture
+    ) -> String? {
+        if let issue = shortcutStore.validateSwap(
+            action,
+            with: conflictingAction,
+            requestedGesture: requestedGesture
+        ) {
+            return "无法交换：\(issue.message)"
+        }
+
+        let replacementGesture = shortcutStore.primaryBinding(for: action)
+        let newGlobalGesture: ShortcutGesture? = if action == .toggleHistory {
+            requestedGesture
+        } else if conflictingAction == .toggleHistory {
+            replacementGesture
+        } else {
+            nil
+        }
+
+        var candidateHotKey: GlobalHotKey?
+        if shouldRegisterGlobalHotKey, let newGlobalGesture {
+            guard let candidate = makeGlobalHotKey(for: newGlobalGesture) else {
+                return "无法交换：\(newGlobalGesture.displayString) 不能注册为全局快捷键。当前设置保持不变。"
+            }
+            candidateHotKey = candidate
+        }
+
+        if let issue = shortcutStore.swap(
+            action,
+            with: conflictingAction,
+            requestedGesture: requestedGesture
+        ) {
+            return "无法交换：\(issue.message)"
+        }
+        if let candidateHotKey { hotKey = candidateHotKey }
+        openHistoryMenuItem?.title = openHistoryMenuTitle
+        return nil
+    }
+
+    private func setShortcutRecording(_ recording: Bool) -> String? {
+        guard shouldRegisterGlobalHotKey else { return nil }
+        if recording {
+            guard !isRecordingShortcut else { return nil }
+            isRecordingShortcut = true
+            // Carbon 会先拦截当前全局组合；录制期间必须临时注销，录制控件才能收到它。
+            hotKey = nil
+            return nil
+        }
+
+        guard isRecordingShortcut else { return nil }
+        isRecordingShortcut = false
+        guard hotKey == nil else { return nil }
+        let gesture = shortcutStore.primaryBinding(for: .toggleHistory)
+        guard let restored = makeGlobalHotKey(for: gesture) else {
+            return "无法恢复 \(gesture.displayString)：该快捷键可能刚被系统或其他应用占用。请重新录制一个全局快捷键。"
+        }
+        hotKey = restored
+        return nil
     }
 
     @objc private func togglePause() {

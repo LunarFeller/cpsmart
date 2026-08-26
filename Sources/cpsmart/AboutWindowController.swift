@@ -2,8 +2,11 @@ import AppKit
 
 final class AboutWindowController: NSWindowController, NSWindowDelegate {
     private let preferredSize = NSSize(width: 680, height: 760)
+    private let shortcutStore: ShortcutStore
+    private var shortcutObserver: NSObjectProtocol?
 
-    init() {
+    init(shortcutStore: ShortcutStore) {
+        self.shortcutStore = shortcutStore
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: preferredSize),
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
@@ -22,6 +25,14 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         window.collectionBehavior = [.moveToActiveSpace]
         window.contentView = makeContentView()
         window.delegate = self
+        shortcutObserver = NotificationCenter.default.addObserver(
+            forName: ShortcutStore.didChangeNotification,
+            object: shortcutStore,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self, let window = self.window, window.isVisible else { return }
+            self.rebuildContent(window)
+        }
     }
 
     @available(*, unavailable)
@@ -29,14 +40,41 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        if let shortcutObserver {
+            NotificationCenter.default.removeObserver(shortcutObserver)
+        }
+    }
+
     func show() {
         guard let window else { return }
         if !window.isVisible {
+            // 快捷键变更通知只在窗口可见时重建界面；重开时先重建，保证展示的是最新快捷键。
+            rebuildContent(window)
             center(window: window, on: screenUnderMouse())
         }
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        #if DEBUG
+        // 开发用：滚动一段距离，验证内容不会进入红绿灯按钮区域。
+        if CommandLine.arguments.contains("--demo-about-scrolled") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak window] in
+                guard let scrollView = window?.contentView?.subviews
+                    .first(where: { $0 is NSScrollView }) as? NSScrollView else { return }
+                scrollView.documentView?.scroll(NSPoint(x: 0, y: 300))  // FlippedView：y 增大向下滚
+            }
+        }
+        #endif
+    }
+
+    /// 替换窗口内容并把滚动位置重置回顶部——替换 contentView 后 NSScrollView
+    /// 的初始滚动位置会停在错误偏移，导致顶部图标区被滚出视野。
+    private func rebuildContent(_ window: NSWindow) {
+        window.contentView = makeContentView()
+        window.layoutIfNeeded()
+        let scrollView = window.contentView?.subviews.first(where: { $0 is NSScrollView }) as? NSScrollView
+        scrollView?.contentView.scroll(to: .zero)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -105,7 +143,10 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: background.topAnchor),
+            // fullSizeContentView 下内容一直延伸到窗口顶；contentInsets 只影响回到
+            // 顶部时的静止位置，滚动时内容仍会压到红绿灯按钮。把滚动视图钉在
+            // safeArea（不含标题栏）之下，内容物理上不可能进入按钮区域。
+            scrollView.topAnchor.constraint(equalTo: background.safeAreaLayoutGuide.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: background.bottomAnchor),
 
             documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
@@ -115,8 +156,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
             contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 32),
             contentStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -32),
-            // 顶部留出标题栏高度（fullSizeContentView 下内容从窗口顶开始）
-            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 56),
+            // 滚动视图顶部已在 safeArea（标题栏）之下，这里只是内容间距
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 26),
             contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -24)
         ])
         return background
@@ -179,8 +220,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             symbol: "sparkles",
             rows: [
                 ("", "在任何应用中复制文本、图片或文件。"),
-                ("", "按 ⇧⌘V 打开历史浮窗，直接输入即可搜索。"),
-                ("", "选中后按回车，或双击卡片，粘贴回原来的应用。")
+                ("", "按 \(shortcutStore.displayString(for: .toggleHistory)) 打开历史浮窗，再按 \(shortcutStore.displayString(for: .toggleSearchFocus)) 进入搜索。"),
+                ("", "选中后按 \(shortcutStore.displayString(for: .pasteSelection))，或双击卡片，粘贴回原来的应用。")
             ].map { (step: $0.0, detail: $0.1) }
         ) { [weak self] _, detail in
             let line = self?.label(detail, size: 12.5) ?? NSTextField()
@@ -192,16 +233,19 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
     private func makeKeyboardCard() -> NSView {
         let rows: [(key: String, detail: String)] = [
-            ("⇧⌘V", "打开或关闭剪贴板历史"),
-            ("←  →", "在卡片之间移动选择"),
-            ("Space", "Quick Look 预览所选内容"),
-            ("Tab", "在卡片与搜索框之间切换"),
-            ("回车", "粘贴所选内容到原应用"),
-            ("⌘P", "置顶或取消置顶"),
-            ("⌘⌫", "删除所选记录"),
-            ("⌘1–4", "筛选全部、文本、图片、文件"),
-            ("Esc", "先清除搜索，再关闭窗口"),
-            ("A–Z", "直接输入即可过滤搜索")
+            (shortcutStore.displayString(for: .toggleHistory), "打开或关闭剪贴板历史"),
+            (shortcutStore.displayString(for: .selectPrevious), "选择上一张卡片"),
+            (shortcutStore.displayString(for: .selectNext), "选择下一张卡片"),
+            (shortcutStore.displayString(for: .toggleQuickLook), "自适应预览所选内容"),
+            (shortcutStore.displayString(for: .toggleSearchFocus), "在卡片与搜索框之间切换"),
+            (shortcutStore.displayString(for: .pasteSelection), "粘贴所选内容到原应用"),
+            (shortcutStore.displayString(for: .togglePin), "置顶或取消置顶"),
+            (shortcutStore.displayString(for: .deleteSelection), "删除所选记录"),
+            (shortcutStore.displayString(for: .filterAll), "筛选全部记录"),
+            (shortcutStore.displayString(for: .filterText), "筛选文本"),
+            (shortcutStore.displayString(for: .filterImage), "筛选图片"),
+            (shortcutStore.displayString(for: .filterFiles), "筛选文件"),
+            (shortcutStore.displayString(for: .clearSearchOrClose), "先清除搜索，再关闭窗口")
         ]
         return makeCard(
             title: "键盘快捷键",
@@ -252,7 +296,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         let keyLabel = label(key, size: 12.5, weight: .semibold)
         keyLabel.translatesAutoresizingMaskIntoConstraints = false
         keyLabel.alignment = .right
-        keyLabel.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        keyLabel.widthAnchor.constraint(equalToConstant: 82).isActive = true
 
         let detailLabel = label(detail, size: 12.5, color: .secondaryLabelColor)
         detailLabel.maximumNumberOfLines = 0
@@ -326,7 +370,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             columns.alignment = .top
             columns.spacing = 26
             columns.distribution = .fillEqually
-            for chunk in [Array(rows.prefix(midpoint)), Array(rows.suffix(midpoint))] {
+            // 奇数行时 prefix 多取一行，suffix 必须取剩余部分，否则会重复中间一行。
+            for chunk in [Array(rows.prefix(midpoint)), Array(rows.suffix(rows.count - midpoint))] {
                 let column = NSStackView()
                 column.orientation = .vertical
                 column.alignment = .leading
@@ -376,16 +421,35 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         footer.spacing = 6
 
         let signature = label("cpsmart · 为 macOS 设计 ·", size: 11, color: .tertiaryLabelColor)
-        let link = NSTextField(labelWithAttributedString: NSAttributedString(
+        // NSTextField 的 .link 属性在不可选中的 label 里不会响应点击，
+        // 用无边框按钮实现真正的跳转。
+        let link = NSButton(
+            title: "GitHub",
+            target: self,
+            action: #selector(openRepository)
+        )
+        link.isBordered = false
+        link.attributedTitle = NSAttributedString(
             string: "GitHub",
             attributes: [
-                .link: URL(string: "https://github.com/dongdaoguang/cpsmart")!,
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium)
+                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .cursor: NSCursor.pointingHand
             ]
-        ))
+        )
+        link.toolTip = repositoryURL.absoluteString
         footer.addArrangedSubview(signature)
         footer.addArrangedSubview(link)
         return footer
+    }
+
+    private var repositoryURL: URL {
+        URL(string: "https://github.com/dongdaoguang/cpsmart")!
+    }
+
+    @objc private func openRepository() {
+        NSWorkspace.shared.open(repositoryURL)
     }
 
     // MARK: 工具

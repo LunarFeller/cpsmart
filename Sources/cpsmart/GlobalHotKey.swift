@@ -2,11 +2,19 @@ import Carbon
 import Foundation
 
 final class GlobalHotKey {
+    private static var nextIdentifier: UInt32 = 1
+
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
+    private let identifier: UInt32
     private let action: () -> Void
 
-    init?(action: @escaping () -> Void) {
+    let gesture: ShortcutGesture
+
+    init?(gesture: ShortcutGesture, action: @escaping () -> Void) {
+        identifier = Self.nextIdentifier
+        Self.nextIdentifier &+= 1
+        self.gesture = gesture
         self.action = action
 
         var eventType = EventTypeSpec(
@@ -28,10 +36,12 @@ final class GlobalHotKey {
                     nil,
                     &hotKeyID
                 )
-                guard status == noErr, hotKeyID.signature == GlobalHotKey.signature else {
+                let instance = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
+                guard status == noErr,
+                      hotKeyID.signature == GlobalHotKey.signature,
+                      hotKeyID.id == instance.identifier else {
                     return OSStatus(eventNotHandledErr)
                 }
-                let instance = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
                 instance.action()
                 return noErr
             },
@@ -43,11 +53,10 @@ final class GlobalHotKey {
 
         guard installStatus == noErr else { return nil }
 
-        let hotKeyID = EventHotKeyID(signature: Self.signature, id: 1)
-        let modifiers = UInt32(cmdKey | shiftKey)
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: identifier)
         let registerStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_V),
-            modifiers,
+            UInt32(gesture.keyCode),
+            gesture.carbonModifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,

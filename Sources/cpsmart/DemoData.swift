@@ -81,7 +81,7 @@ enum DemoData {
                     - [x] 搜索过滤
                     - [x] 图片缩略图
                     - [x] 来源应用图标
-                    - [x] QuickLook 预览
+                    - [x] 自适应预览
                     """),
                 createdAt: now.addingTimeInterval(-3 * 3600),
                 sourceAppName: "备忘录",
@@ -96,6 +96,28 @@ enum DemoData {
                 createdAt: now.addingTimeInterval(-5 * 3600),
                 sourceAppName: "访达",
                 sourceAppBundleID: "com.apple.finder"
+            )
+        ]
+    }
+
+    static func makePinboards() -> [Pinboard] {
+        [
+            Pinboard(
+                name: "常用命令",
+                color: .red,
+                entries: [
+                    ClipboardEntry(payload: .text("git status --short --branch")),
+                    ClipboardEntry(payload: .text("swift build && bash Scripts/run_tests.sh")),
+                    ClipboardEntry(payload: .text("curl -fsSL https://example.com/install.sh | sh"))
+                ]
+            ),
+            Pinboard(
+                name: "常用回复",
+                color: .blue,
+                entries: [
+                    ClipboardEntry(payload: .text("收到，我确认后尽快回复你。")),
+                    ClipboardEntry(payload: .text("麻烦补充一下复现步骤和系统版本，谢谢。"))
+                ]
             )
         ]
     }

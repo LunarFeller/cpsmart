@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 
 @main
@@ -31,7 +32,110 @@ struct CoreTests {
         try testPinnedFieldLegacyCompatibility(in: temporaryDirectory)
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
+        try testAdaptivePreviewSizing()
+        try testShortcutDefaultsAndValidation()
+        try testShortcutPersistenceAndReset()
+        try testShortcutResetAndSwap()
+        try testShortcutMatcherContexts()
+        try testInvalidShortcutPersistenceFallsBackToDefaults()
+        try testPinboardLifecycle(in: temporaryDirectory)
+        try testPinboardEntryPersistence(in: temporaryDirectory)
+        try testPinboardReordering(in: temporaryDirectory)
+        try testPinboardNameValidation(in: temporaryDirectory)
         print("All cpsmart core tests passed.")
+    }
+
+    private static func testAdaptivePreviewSizing() throws {
+        // 负坐标副屏不应改变尺寸计算；算法只能依赖相对边界。
+        let primaryVisible = NSRect(x: 0, y: 0, width: 1440, height: 860)
+        let secondaryVisible = NSRect(x: -1440, y: 120, width: 1440, height: 860)
+        let primarySource = NSRect(x: 120, y: 130, width: 204, height: 150)
+        let secondarySource = NSRect(x: -1320, y: 250, width: 204, height: 150)
+        let primaryLimits = AdaptivePreviewSizing.limits(
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        let secondaryLimits = AdaptivePreviewSizing.limits(
+            visibleFrame: secondaryVisible,
+            sourceFrame: secondarySource
+        )
+        try require(
+            primaryLimits.maximumWidth == secondaryLimits.maximumWidth
+                && primaryLimits.maximumHeight == secondaryLimits.maximumHeight,
+            "adaptive preview sizing depended on the screen origin"
+        )
+
+        let font = NSFont.systemFont(ofSize: 13.5)
+        let shortText = AdaptivePreviewSizing.textSize(
+            for: "一小段文本",
+            font: font,
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        let longText = AdaptivePreviewSizing.textSize(
+            for: Array(repeating: "这是一段需要滚动显示的长文本。", count: 180).joined(separator: "\n"),
+            font: font,
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            shortText.width < longText.width && shortText.height < longText.height,
+            "long text did not receive a larger preview than short text"
+        )
+        try require(
+            longText.width <= primaryLimits.maximumWidth
+                && longText.height <= primaryLimits.maximumHeight,
+            "long text preview exceeded the screen-derived limits"
+        )
+
+        let naturalImage = AdaptivePreviewSizing.imageSize(
+            pixelSize: NSSize(width: 490, height: 159),
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            naturalImage.width == 514 && naturalImage.height == 231,
+            "small image was unexpectedly enlarged or distorted"
+        )
+
+        let largeImage = AdaptivePreviewSizing.imageSize(
+            pixelSize: NSSize(width: 6000, height: 4000),
+            visibleFrame: primaryVisible,
+            sourceFrame: primarySource
+        )
+        try require(
+            largeImage.width <= primaryLimits.maximumWidth
+                && largeImage.height <= primaryLimits.maximumHeight,
+            "large image preview exceeded the screen-derived limits"
+        )
+
+        let smallScreen = NSRect(x: 0, y: 0, width: 360, height: 420)
+        let smallScreenSource = NSRect(x: 20, y: 40, width: 200, height: 120)
+        let constrained = AdaptivePreviewSizing.textSize(
+            for: String(repeating: "内容 ", count: 1_000),
+            font: font,
+            visibleFrame: smallScreen,
+            sourceFrame: smallScreenSource
+        )
+        try require(
+            constrained.width <= smallScreen.width - 48
+                && constrained.height <= smallScreen.height - 48,
+            "adaptive preview did not respect a small screen's safe bounds"
+        )
+
+        let secondaryQuickLookFrame = AdaptivePreviewSizing.centeredQuickLookFrame(
+            panelSize: NSSize(width: 816, height: 816),
+            visibleFrame: secondaryVisible
+        )
+        try require(
+            secondaryVisible.insetBy(dx: 24, dy: 24).contains(secondaryQuickLookFrame),
+            "Quick Look frame escaped the negative-origin secondary display"
+        )
+        try require(
+            secondaryQuickLookFrame.midX == secondaryVisible.midX
+                && secondaryQuickLookFrame.midY == secondaryVisible.midY,
+            "Quick Look frame was not centered on the selected display"
+        )
     }
 
     private static func testDeduplication(in directory: URL) throws {
@@ -49,6 +153,143 @@ struct CoreTests {
         try require(
             store.entries.first?.createdAt == Date(timeIntervalSince1970: 3),
             "promoted entry timestamp was not refreshed"
+        )
+    }
+
+    private static func testPinboardLifecycle(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-lifecycle.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: " 常用命令 ", color: .red),
+            "valid pinboard was not created"
+        )
+        try require(board.name == "常用命令", "pinboard name was not trimmed")
+
+        try require(store.rename(id: board.id, to: "开发命令"), "pinboard was not renamed")
+        store.setColor(id: board.id, color: .blue)
+
+        let reloaded = PinboardStore(fileURL: URL)
+        try require(
+            reloaded.boards.first?.name == "开发命令"
+                && reloaded.boards.first?.color == .blue,
+            "pinboard metadata did not persist"
+        )
+
+        reloaded.removeBoard(id: board.id)
+        try require(
+            PinboardStore(fileURL: URL).boards.isEmpty,
+            "deleted pinboard was restored after reload"
+        )
+    }
+
+    private static func testPinboardEntryPersistence(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-entries.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: "回复", color: .green),
+            "pinboard was not created"
+        )
+        let historyEntry = ClipboardEntry(
+            payload: .text("常用回复"),
+            createdAt: Date(timeIntervalSince1970: 1),
+            sourceAppName: "备忘录",
+            sourceAppBundleID: "com.apple.Notes",
+            isPinned: true
+        )
+        let firstFavorite = try requireValue(
+            store.add(historyEntry, to: board.id),
+            "history entry was not added to pinboard"
+        )
+        try require(firstFavorite.id != historyEntry.id, "pinboard did not create an independent snapshot")
+        try require(firstFavorite.isPinned != true, "history pin state leaked into pinboard")
+
+        let duplicateFavorite = store.add(historyEntry, to: board.id)
+        try require(
+            store.boards.first?.entries.count == 1,
+            "adding the same payload created duplicate favorites"
+        )
+        try require(
+            duplicateFavorite?.id == firstFavorite.id,
+            "adding an existing favorite replaced or reordered its snapshot"
+        )
+
+        let reloaded = PinboardStore(fileURL: URL)
+        let reloadedEntry = try requireValue(
+            reloaded.boards.first?.entries.first,
+            "pinboard entry did not persist"
+        )
+        try require(
+            reloadedEntry.payload == historyEntry.payload
+                && reloadedEntry.sourceAppBundleID == historyEntry.sourceAppBundleID,
+            "pinboard snapshot lost payload or source metadata"
+        )
+
+        reloaded.removeEntry(id: reloadedEntry.id, from: board.id)
+        try require(
+            PinboardStore(fileURL: URL).boards.first?.entries.isEmpty == true,
+            "removed favorite was restored after reload"
+        )
+    }
+
+    private static func testPinboardNameValidation(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-name-validation.json")
+        let store = PinboardStore(fileURL: URL)
+        try require(
+            store.create(name: " \n ", color: .gray) == nil,
+            "blank pinboard name was accepted"
+        )
+        let longName = String(repeating: "名", count: 40)
+        let board = try requireValue(
+            store.create(name: longName, color: .purple),
+            "long pinboard name was rejected instead of normalized"
+        )
+        try require(board.name.count == 30, "long pinboard name was not capped at 30 characters")
+        try require(
+            !store.rename(id: board.id, to: "   "),
+            "blank pinboard rename was accepted"
+        )
+    }
+
+    private static func testPinboardReordering(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-reordering.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: "有序命令", color: .orange),
+            "pinboard was not created"
+        )
+        store.add(ClipboardEntry(payload: .text("one")), to: board.id)
+        store.add(ClipboardEntry(payload: .text("two")), to: board.id)
+        let three = try requireValue(
+            store.add(ClipboardEntry(payload: .text("three")), to: board.id),
+            "third pinboard entry was not added"
+        )
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("three"), .text("two"), .text("one")
+            ],
+            "pinboard seed order was unexpected"
+        )
+
+        store.moveEntry(id: three.id, toInsertionIndex: 3, in: board.id)
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("two"), .text("one"), .text("three")
+            ],
+            "moving a favorite to the end used the wrong insertion index"
+        )
+        try require(
+            PinboardStore(fileURL: URL).boards.first?.entries.map(\.payload) == [
+                .text("two"), .text("one"), .text("three")
+            ],
+            "reordered favorites did not persist"
+        )
+
+        store.moveEntry(id: three.id, toInsertionIndex: 0, in: board.id)
+        try require(
+            store.boards.first?.entries.map(\.payload) == [
+                .text("three"), .text("two"), .text("one")
+            ],
+            "moving a favorite to the beginning failed"
         )
     }
 
@@ -457,6 +698,289 @@ struct CoreTests {
         )
     }
 
+    private static func testShortcutDefaultsAndValidation() throws {
+        let suiteName = "cpsmartTests-shortcutDefaults-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+
+        try require(
+            shortcuts.displayString(for: .toggleHistory) == "⇧⌘V",
+            "default global shortcut display changed"
+        )
+        try require(
+            shortcuts.bindings(for: .pasteSelection).count == 2,
+            "Return and keypad Enter defaults were not both preserved"
+        )
+        try require(
+            shortcuts.displayString(for: .addToPinboard) == "⌘D",
+            "default pinboard shortcut display changed"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_UpArrow)),
+                for: .selectPrevious
+            ) == nil,
+            "an unmodified arrow key was rejected"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_A)),
+                for: .selectPrevious
+            ) == .requiresModifier,
+            "an unmodified text key was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_A), modifiers: [.shift]),
+                for: .toggleHistory
+            ) == .globalRequiresModifier,
+            "a shift-only global shortcut was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.command]),
+                for: .toggleQuickLook
+            ) == .reservedByApplication,
+            "Command-Q was accepted as a configurable shortcut"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command]),
+                for: .toggleQuickLook
+            ) == .reservedByApplication,
+            "standard Command-C editing shortcut was accepted"
+        )
+        try require(
+            shortcuts.validate(
+                ShortcutGesture(keyCode: UInt16(kVK_RightArrow)),
+                for: .selectPrevious
+            ) == .conflictsWith(.selectNext),
+            "duplicate shortcut conflict was not detected"
+        )
+    }
+
+    private static func testShortcutPersistenceAndReset() throws {
+        let suiteName = "cpsmartTests-shortcutPersistence-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+
+        let up = ShortcutGesture(keyCode: UInt16(kVK_UpArrow))
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        try require(
+            shortcuts.set(up, for: .selectPrevious) == nil,
+            "valid shortcut override was rejected"
+        )
+        try require(shortcuts.hasCustomizations, "customization state was not recorded")
+
+        let reloaded = ShortcutStore(userDefaults: settings)
+        try require(
+            reloaded.bindings(for: .selectPrevious) == [up],
+            "shortcut override did not persist"
+        )
+        let left = ShortcutGesture(keyCode: UInt16(kVK_LeftArrow))
+        try require(
+            reloaded.set(left, for: .selectPrevious) == nil
+                && !reloaded.hasCustomizations
+                && settings.data(forKey: ShortcutStore.defaultsKey) == nil,
+            "recording the single default binding did not clear its override"
+        )
+        try require(
+            reloaded.set(up, for: .selectPrevious) == nil,
+            "shortcut could not be customized again after returning to default"
+        )
+        reloaded.resetToDefaults()
+        try require(
+            !reloaded.hasCustomizations
+                && reloaded.primaryBinding(for: .selectPrevious).keyCode == UInt16(kVK_LeftArrow)
+                && settings.data(forKey: ShortcutStore.defaultsKey) == nil,
+            "reset did not remove persisted overrides and restore defaults"
+        )
+    }
+
+    private static func testShortcutResetAndSwap() throws {
+        let suiteName = "cpsmartTests-shortcutEditing-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+
+        let left = ShortcutGesture(keyCode: UInt16(kVK_LeftArrow))
+        let right = ShortcutGesture(keyCode: UInt16(kVK_RightArrow))
+
+        try require(
+            shortcuts.swap(
+                .selectPrevious,
+                with: .selectNext,
+                requestedGesture: right
+            ) == nil
+                && shortcuts.primaryBinding(for: .selectPrevious) == right
+                && shortcuts.primaryBinding(for: .selectNext) == left
+                && shortcuts.customizationCount == 2,
+            "conflicting navigation shortcuts were not swapped atomically"
+        )
+        try require(
+            shortcuts.validateReset(for: .selectPrevious) == .conflictsWith(.selectNext),
+            "single-action reset did not detect a conflict with the current bindings"
+        )
+        // 交换状态下两项互为对方默认值，任何单项恢复都会冲突；
+        // 先把其中一项改到空闲按键，才能单项恢复另一项。
+        try require(
+            shortcuts.set(ShortcutGesture(keyCode: UInt16(kVK_UpArrow)), for: .selectNext) == nil,
+            "moving selectNext to a free key was rejected"
+        )
+        try require(
+            shortcuts.resetToDefault(.selectPrevious) == nil
+                && shortcuts.primaryBinding(for: .selectPrevious) == left
+                && !shortcuts.isCustomized(.selectPrevious)
+                && shortcuts.isCustomized(.selectNext),
+            "single-action reset did not restore only the requested shortcut"
+        )
+
+        let globalGesture = shortcuts.primaryBinding(for: .toggleHistory)
+        try require(
+            shortcuts.validateSwap(
+                .selectPrevious,
+                with: .toggleHistory,
+                requestedGesture: globalGesture
+            ) == .globalRequiresModifier,
+            "swap allowed an unmodified key to become the global shortcut"
+        )
+    }
+
+    private static func testShortcutMatcherContexts() throws {
+        let suiteName = "cpsmartTests-shortcutMatcher-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        let matcher = ShortcutMatcher(store: shortcuts)
+
+        let left = makeKeyEvent(keyCode: UInt16(kVK_LeftArrow), characters: "")
+        try require(
+            matcher.action(for: left, context: .browsing) == .selectPrevious,
+            "left arrow did not resolve in browsing context"
+        )
+        try require(
+            matcher.action(for: left, context: .searching) == nil,
+            "left arrow intercepted search field navigation"
+        )
+
+        let tab = makeKeyEvent(keyCode: UInt16(kVK_Tab), characters: "\t")
+        try require(
+            matcher.action(for: tab, context: .searching) == .toggleSearchFocus,
+            "Tab did not resolve in search context"
+        )
+        try require(
+            matcher.action(for: tab, context: .composingSearchText) == nil,
+            "Tab intercepted input method composition"
+        )
+
+        let commandOne = makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_1),
+            modifiers: [.command],
+            characters: "1"
+        )
+        try require(
+            matcher.action(for: commandOne, context: .composingSearchText) == .filterAll,
+            "explicit Command shortcut stopped working during input method composition"
+        )
+
+        let commandD = makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_D),
+            modifiers: [.command],
+            characters: "d"
+        )
+        try require(
+            matcher.action(for: commandD, context: .browsing) == .addToPinboard
+                && matcher.action(for: commandD, context: .composingSearchText) == .addToPinboard,
+            "pinboard shortcut did not resolve in supported contexts"
+        )
+
+        let space = makeKeyEvent(keyCode: UInt16(kVK_Space), characters: " ")
+        try require(
+            matcher.action(for: space, context: .browsing) == .toggleQuickLook,
+            "Space did not resolve in browsing context"
+        )
+        try require(
+            matcher.action(for: space, context: .searching) == nil,
+            "Space was intercepted while typing in the search field"
+        )
+        // 即使用户把 Space 重绑定给粘贴，搜索框里的空格仍然必须是输入字符。
+        try require(
+            shortcuts.swap(
+                .pasteSelection,
+                with: .toggleQuickLook,
+                requestedGesture: ShortcutGesture(keyCode: UInt16(kVK_Space))
+            ) == nil,
+            "Space could not be swapped onto paste"
+        )
+        try require(
+            matcher.action(for: space, context: .browsing) == .pasteSelection
+                && matcher.action(for: space, context: .searching) == nil,
+            "rebound Space was intercepted while typing in the search field"
+        )
+
+        let optionCommandP = makeKeyEvent(
+            keyCode: UInt16(kVK_ANSI_P),
+            modifiers: [.option, .command],
+            characters: "p"
+        )
+        try require(
+            matcher.action(for: optionCommandP, context: .browsing) == nil,
+            "shortcut matching ignored extra modifiers"
+        )
+
+        let optionUp = ShortcutGesture(keyCode: UInt16(kVK_UpArrow), modifiers: [.option])
+        try require(
+            shortcuts.set(optionUp, for: .togglePin) == nil,
+            "Option-arrow custom shortcut was rejected"
+        )
+        let optionUpEvent = makeKeyEvent(
+            keyCode: UInt16(kVK_UpArrow),
+            modifiers: [.option],
+            characters: ""
+        )
+        try require(
+            matcher.action(for: optionUpEvent, context: .browsing) == .togglePin
+                && matcher.action(for: optionUpEvent, context: .searching) == nil,
+            "custom management shortcut intercepted search field word navigation"
+        )
+    }
+
+    private static func testInvalidShortcutPersistenceFallsBackToDefaults() throws {
+        let suiteName = "cpsmartTests-invalidShortcuts-\(UUID().uuidString)"
+        let settings = UserDefaults(suiteName: suiteName)!
+        defer { settings.removePersistentDomain(forName: suiteName) }
+        let invalidJSON = """
+        {"version":1,"bindings":{"selectPrevious":[{"keyCode":0,"modifiersRawValue":0}]}}
+        """
+        settings.set(Data(invalidJSON.utf8), forKey: ShortcutStore.defaultsKey)
+
+        let shortcuts = ShortcutStore(userDefaults: settings)
+        try require(
+            shortcuts.primaryBinding(for: .selectPrevious).keyCode == UInt16(kVK_LeftArrow),
+            "invalid persisted shortcut did not fall back to the default"
+        )
+    }
+
+    private static func makeKeyEvent(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags = [],
+        characters: String
+    ) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        )!
+    }
+
     private static func makePNGData() throws -> Data {
         guard let representation = NSBitmapImageRep(
             bitmapDataPlanes: nil,
@@ -509,6 +1033,17 @@ struct CoreTests {
                 userInfo: [NSLocalizedDescriptionKey: message]
             )
         }
+    }
+
+    private static func requireValue<T>(_ value: T?, _ message: String) throws -> T {
+        guard let value else {
+            throw NSError(
+                domain: "cpsmartCoreTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message]
+            )
+        }
+        return value
     }
 
     private struct LegacyClipboardEntry: Codable {
