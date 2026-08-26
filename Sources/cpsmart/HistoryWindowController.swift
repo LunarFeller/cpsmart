@@ -1417,6 +1417,10 @@ final class HistoryWindowController: NSWindowController,
 
         let nameField = NSTextField(string: "")
         nameField.placeholderString = "名称，例如：常用命令"
+        // leading 对齐的 stack 不会拉伸子视图；输入框必须显式给宽度，
+        // 否则空串 + 占位符的固有尺寸会让它塌缩成几乎不可见的一条缝。
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        nameField.widthAnchor.constraint(equalToConstant: 280).isActive = true
         // 颜色直接点选色点，选中项带描边圈，比弹出菜单更直观。
         let colorPicker = PinboardColorPickerView(
             colors: PinboardColor.allCases.map { palette.pinboardColor($0) },
@@ -2122,6 +2126,11 @@ final class HistoryWindowController: NSWindowController,
                 }
             }
         }
+    }
+
+    /// 开发用：直接弹出新建收藏板 sheet，验证表单布局（名称输入框 + 色点行）。
+    func showDemoNewPinboardSheet() {
+        promptToCreatePinboard(adding: nil)
     }
 
     /// 开发用：直接渲染浮窗内容，避免多屏坐标和窗口共享策略影响自动截图。

@@ -120,6 +120,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.historyWindow.runDemoPreviewSession(textIndex: index, logURL: logURL)
                     }
                 }
+                if CommandLine.arguments.contains("--demo-new-pinboard-sheet") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        self?.historyWindow.showDemoNewPinboardSheet()
+                    }
+                }
                 if let snapshotIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot"),
                    CommandLine.arguments.indices.contains(snapshotIndex + 1) {
                     let snapshotURL = URL(

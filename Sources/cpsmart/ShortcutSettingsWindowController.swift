@@ -629,6 +629,16 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
         window.recalculateKeyViewLoop()
+        #if DEBUG
+        // 开发用：滚动一段距离，验证内容不会进入红绿灯按钮区域。
+        if CommandLine.arguments.contains("--demo-settings-scrolled") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak window] in
+                guard let scrollView = window?.contentView?.subviews
+                    .first(where: { $0 is NSScrollView }) as? NSScrollView else { return }
+                scrollView.documentView?.scroll(NSPoint(x: 0, y: 300))
+            }
+        }
+        #endif
     }
 
     func applyAppearanceMode() {
@@ -646,9 +656,7 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        // fullSizeContentView 下内容会延伸到标题栏区域；顶部留出 28pt，
-        // 滚动时内容才不会压到左上角的红绿灯按钮。
-        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 0, bottom: 10, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 10, right: 0)
 
         let documentView = FlippedShortcutSettingsView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
@@ -721,7 +729,9 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: backdrop.topAnchor),
+            // fullSizeContentView 下 contentInsets 只影响静止位置，滚动时内容
+            // 仍会压到红绿灯按钮；钉在 safeArea（不含标题栏）之下才能根除。
+            scrollView.topAnchor.constraint(equalTo: backdrop.safeAreaLayoutGuide.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: footer.topAnchor),
 
             footer.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor),

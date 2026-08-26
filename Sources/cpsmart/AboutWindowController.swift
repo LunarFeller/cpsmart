@@ -56,6 +56,16 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        #if DEBUG
+        // 开发用：滚动一段距离，验证内容不会进入红绿灯按钮区域。
+        if CommandLine.arguments.contains("--demo-about-scrolled") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak window] in
+                guard let scrollView = window?.contentView?.subviews
+                    .first(where: { $0 is NSScrollView }) as? NSScrollView else { return }
+                scrollView.documentView?.scroll(NSPoint(x: 0, y: 300))  // FlippedView：y 增大向下滚
+            }
+        }
+        #endif
     }
 
     /// 替换窗口内容并把滚动位置重置回顶部——替换 contentView 后 NSScrollView
@@ -102,9 +112,6 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        // fullSizeContentView 下内容会延伸到标题栏区域；顶部留出 28pt，
-        // 滚动时内容才不会压到左上角的红绿灯按钮（与快捷键设置页一致）。
-        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 0, bottom: 10, right: 0)
 
         let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
@@ -136,7 +143,10 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: background.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: background.trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: background.topAnchor),
+            // fullSizeContentView 下内容一直延伸到窗口顶；contentInsets 只影响回到
+            // 顶部时的静止位置，滚动时内容仍会压到红绿灯按钮。把滚动视图钉在
+            // safeArea（不含标题栏）之下，内容物理上不可能进入按钮区域。
+            scrollView.topAnchor.constraint(equalTo: background.safeAreaLayoutGuide.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: background.bottomAnchor),
 
             documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
@@ -146,7 +156,7 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
             contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 32),
             contentStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -32),
-            // 顶部留白 = contentInsets(28) + 此处 26，与设置页一致
+            // 滚动视图顶部已在 safeArea（标题栏）之下，这里只是内容间距
             contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 26),
             contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -24)
         ])
