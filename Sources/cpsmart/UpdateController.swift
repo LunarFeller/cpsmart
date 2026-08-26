@@ -303,9 +303,9 @@ final class UpdateController {
                     }
                     self.showInformation(
                         title: "cpsmart \(releaseVersion) 已下载",
-                        message: opened
-                            ? "安装镜像已经打开。请退出当前 cpsmart，再把新版拖到“应用程序”并选择“替换”。"
-                            : "安装包已保存到“下载”文件夹。请打开它，退出当前 cpsmart，再把新版拖到“应用程序”并选择“替换”。"
+                        message: UpdateSupport.installationInstructions(
+                            installerOpened: opened
+                        )
                     )
                 case let .failure(error):
                     self.writeDiagnostic("downloadError=\(error.localizedDescription)")

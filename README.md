@@ -78,7 +78,7 @@ cpsmart 只有在你按 `Return` 或双击卡片自动粘贴时，才需要“�
 
 更新检查只跟随 `dongdaoguang/cpsmart` 的“最新正式 Release”页面来读取版本 Tag，并只接受该仓库 Release 下的 HTTPS DMG 下载地址。它不使用有频率限额的 GitHub API，也不会上传剪贴板历史或其他本地内容。
 
-安装新的本地测试包后，如果自动粘贴失效，请前往“系统设置 → 隐私与安全性 → 辅助功能”，用 `−` 删除旧的 cpsmart，再用 `+` 重新添加 `/Applications/cpsmart.app`。
+当前临时签名包的应用身份会随二进制变化，更新后可能需要重新授权辅助功能。此时再次尝试粘贴，选择“重置旧权限并打开设置”：cpsmart 会通过系统命令只清除自己的旧权限记录并打开正确页面，用户只需找到 cpsmart、打开开关并重启应用；若列表没有 cpsmart，再点击“+”选择 `/Applications/cpsmart.app`。macOS 不允许应用替用户授予辅助功能权限。
 
 ## 使用方式
 

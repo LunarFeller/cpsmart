@@ -148,6 +148,25 @@ struct CoreTests {
         try require(current == equivalent, "equivalent versions compared as different")
         try require(AppVersion("1.8-beta") == nil, "prerelease version was accepted")
 
+        let openedInstructions = UpdateSupport.installationInstructions(installerOpened: true)
+        let savedInstructions = UpdateSupport.installationInstructions(installerOpened: false)
+        try require(
+            openedInstructions.contains("1. 从菜单栏退出当前 cpsmart")
+                && openedInstructions.contains("重置旧权限并打开设置")
+                && openedInstructions.contains("亲自开启权限开关"),
+            "downloaded update instructions did not explain installation and optional permission repair"
+        )
+        try require(
+            savedInstructions.contains("“下载”文件夹，请先打开它"),
+            "saved installer instructions did not explain how to open the DMG"
+        )
+        try require(
+            AccessibilityPermissionSupport.resetArguments(
+                bundleIdentifier: "com.cpsmart.app"
+            ) == ["reset", "Accessibility", "com.cpsmart.app"],
+            "Accessibility repair could reset more than the current cpsmart bundle"
+        )
+
         let officialAsset = GitHubReleaseAsset(
             name: "cpsmart-1.10.0-universal.dmg",
             browserDownloadURL: URL(

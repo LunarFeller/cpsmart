@@ -2037,28 +2037,35 @@ final class HistoryWindowController: NSWindowController,
 
     private func showAccessibilityPermissionHelp() {
         let alert = NSAlert()
-        alert.messageText = "需要开启“辅助功能”权限"
+        alert.messageText = "自动粘贴需要“辅助功能”权限"
         alert.informativeText = """
-        请按下面的路径操作：
+        如果更新后列表里仍是旧的 cpsmart，可以让应用先清除自己的旧权限记录，再为当前版本重新请求权限。
 
-        系统设置 → 隐私与安全性 → 辅助功能
+        点击“重置旧权限并打开设置”后：
 
-        1. 确认 cpsmart 已放在“应用程序”文件夹。
-        2. 点击应用列表下方的“+”，选择“应用程序”里的 cpsmart。
-        3. 打开 cpsmart 右侧的开关；按系统提示输入密码或使用 Touch ID。
-        4. 完全退出 cpsmart，然后重新打开。
+        1. 在打开的“辅助功能”列表中找到 cpsmart。
+        2. 打开右侧开关；如果没有出现，点击“+”选择 /Applications/cpsmart.app。
+        3. 完全退出 cpsmart，然后重新打开。
 
-        如果列表中已有 cpsmart 但仍然无法粘贴，请先用“−”删除旧项，再用“+”重新添加。
+        macOS 不允许应用替你完成最后的授权开关。
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "打开辅助功能设置")
+        alert.addButton(withTitle: "重置旧权限并打开设置")
+        alert.addButton(withTitle: "仅打开设置")
         alert.addButton(withTitle: "稍后")
 
-        guard alert.runModal() == .alertFirstButtonReturn,
-              let settingsURL = URL(
-                  string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-              ) else { return }
-        NSWorkspace.shared.open(settingsURL)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if !AccessibilityPermissionSupport.resetCurrentApplication() {
+                statusLabel.stringValue = "旧权限记录未能自动清除，请在系统设置中手动删除 cpsmart"
+                statusLabel.textColor = .systemOrange
+            }
+            AccessibilityPermissionSupport.requestAndOpenSettings()
+        case .alertSecondButtonReturn:
+            NSWorkspace.shared.open(AccessibilityPermissionSupport.settingsURL)
+        default:
+            break
+        }
     }
 
     private func deleteSelection() {
