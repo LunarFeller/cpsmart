@@ -1774,7 +1774,10 @@ final class HistoryWindowController: NSWindowController,
         if showAdaptivePreviewIfSupported() {
             return
         }
-        showQuickLook()
+        // 文件不提供预览：Quick Look 对多数文件只展示图标，价值低，
+        // 而且面板尺寸异步重算会产生明显闪动。
+        statusLabel.stringValue = "文件没有预览 · 双击直接粘贴"
+        statusLabel.textColor = palette.textSecondary
     }
 
     private func showAdaptivePreviewIfSupported() -> Bool {
@@ -1785,12 +1788,9 @@ final class HistoryWindowController: NSWindowController,
         collectionView.layoutSubtreeIfNeeded()
         guard let itemView = collectionView.item(at: selectedIndex)?.view else { return false }
 
-        // 快速连续切换时也只允许一种预览存在。
-        if isQuickLookVisible {
-            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
-        }
-
-        return adaptivePreviewController.show(
+        // 快速连续切换时也只允许一种预览存在。顺序很关键：必须先弹气泡再关
+        // Quick Look——先关会让 QLPreviewPanel 在 popover.show 时复活（实测确认）。
+        let didShow = adaptivePreviewController.show(
             entry: visibleEntries[selectedIndex],
             relativeTo: itemView,
             palette: palette
@@ -1799,10 +1799,14 @@ final class HistoryWindowController: NSWindowController,
             self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
             self.showQuickLook()
         }
+        if didShow {
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        }
+        return didShow
     }
 
-    /// 选择变化后让预览跟随当前条目：文本/图片保持轻量气泡，文件保持大屏 Quick Look。
-    /// 两种模式之间双向切换，锚点未就绪时有限重试，绝不把文本/图片错误地留在大屏里。
+    /// 选择变化后让预览跟随当前条目：文本/图片保持轻量气泡；文件不提供预览，
+    /// 选中文件时只关闭当前预览。锚点未就绪时有限重试。
     private func syncPreviewWithSelection(retriesRemaining: Int = 3) {
         guard isAdaptivePreviewVisible || isQuickLookVisible else { return }
         // scrollToItems 的布局在当前事件尾部才稳定；等布局完成后再换锚点。
@@ -1813,7 +1817,7 @@ final class HistoryWindowController: NSWindowController,
             let entry = self.visibleEntries[self.selectedIndex]
 
             if AdaptivePreviewController.supports(entry: entry) {
-                // showAdaptivePreviewIfSupported 内部会先关掉 Quick Look。
+                // showAdaptivePreviewIfSupported 内部会先弹气泡再关掉 Quick Look。
                 if !self.showAdaptivePreviewIfSupported(), retriesRemaining > 0 {
                     // 快速切换时新卡片可能尚未滚动到位、锚点视图还没生成，稍后重试。
                     self.syncPreviewWithSelection(retriesRemaining: retriesRemaining - 1)
@@ -1821,19 +1825,9 @@ final class HistoryWindowController: NSWindowController,
                 return
             }
 
-            // 文件走完整 Quick Look。
+            // 文件没有预览：关掉当前预览即可。
             self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
-            if self.isQuickLookVisible {
-                guard self.prepareQuickLookPreview(),
-                      let panel = QLPreviewPanel.shared() else {
-                    self.closeQuickLookIfNeeded(restoreBrowsingFocus: false)
-                    return
-                }
-                panel.reloadData()
-                self.positionQuickLookPanel(panel)
-            } else {
-                self.showQuickLook()
-            }
+            self.closeQuickLookIfNeeded(restoreBrowsingFocus: false)
         }
     }
 
@@ -1884,7 +1878,8 @@ final class HistoryWindowController: NSWindowController,
 
     private func closeQuickLookIfNeeded(restoreBrowsingFocus: Bool) {
         if QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() {
-            if panel.isVisible { panel.orderOut(nil) }
+            // QLPreviewPanel 不吃 orderOut（isVisible 不变），close 才会真正关闭。
+            if panel.isVisible { panel.close() }
             panel.dataSource = nil
             panel.delegate = nil
         }
@@ -1906,12 +1901,10 @@ final class HistoryWindowController: NSWindowController,
         cleanupQuickLookTempFiles()
         let entry = visibleEntries[selectedIndex]
         switch entry.payload {
-        case .files(let paths):
-            guard let path = paths.first, FileManager.default.fileExists(atPath: path) else {
-                quickLookPreviewURL = nil
-                return false
-            }
-            quickLookPreviewURL = URL(fileURLWithPath: path)
+        case .files:
+            // 文件不提供预览，不会进入 Quick Look。
+            quickLookPreviewURL = nil
+            return false
         case .image(let data, let pasteboardType):
             let ext = pasteboardType == NSPasteboard.PasteboardType.tiff.rawValue ? "tiff" : "png"
             quickLookPreviewURL = writeQuickLookTemp(
@@ -2238,11 +2231,11 @@ final class HistoryWindowController: NSWindowController,
                     closeQuickLookIfNeeded(restoreBrowsingFocus: true)
                 }
             case .selectPrevious:
+                // moveSelection 内部已经同步预览；不要再调一次 syncPreviewWithSelection——
+                // 重复执行会让气泡重弹，把正在关闭的 Quick Look 面板复活。
                 moveSelection(by: -1)
-                syncPreviewWithSelection()
             case .selectNext:
                 moveSelection(by: 1)
-                syncPreviewWithSelection()
             default:
                 break
             }

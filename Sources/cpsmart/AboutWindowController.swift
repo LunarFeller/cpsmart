@@ -30,8 +30,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             object: shortcutStore,
             queue: .main
         ) { [weak self] _ in
-            guard let self, self.window?.isVisible == true else { return }
-            self.window?.contentView = self.makeContentView()
+            guard let self, let window = self.window, window.isVisible else { return }
+            self.rebuildContent(window)
         }
     }
 
@@ -49,11 +49,22 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
     func show() {
         guard let window else { return }
         if !window.isVisible {
+            // 快捷键变更通知只在窗口可见时重建界面；重开时先重建，保证展示的是最新快捷键。
+            rebuildContent(window)
             center(window: window, on: screenUnderMouse())
         }
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// 替换窗口内容并把滚动位置重置回顶部——替换 contentView 后 NSScrollView
+    /// 的初始滚动位置会停在错误偏移，导致顶部图标区被滚出视野。
+    private func rebuildContent(_ window: NSWindow) {
+        window.contentView = makeContentView()
+        window.layoutIfNeeded()
+        let scrollView = window.contentView?.subviews.first(where: { $0 is NSScrollView }) as? NSScrollView
+        scrollView?.contentView.scroll(to: .zero)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -346,7 +357,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             columns.alignment = .top
             columns.spacing = 26
             columns.distribution = .fillEqually
-            for chunk in [Array(rows.prefix(midpoint)), Array(rows.suffix(midpoint))] {
+            // 奇数行时 prefix 多取一行，suffix 必须取剩余部分，否则会重复中间一行。
+            for chunk in [Array(rows.prefix(midpoint)), Array(rows.suffix(rows.count - midpoint))] {
                 let column = NSStackView()
                 column.orientation = .vertical
                 column.alignment = .leading
@@ -396,16 +408,35 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         footer.spacing = 6
 
         let signature = label("cpsmart · 为 macOS 设计 ·", size: 11, color: .tertiaryLabelColor)
-        let link = NSTextField(labelWithAttributedString: NSAttributedString(
+        // NSTextField 的 .link 属性在不可选中的 label 里不会响应点击，
+        // 用无边框按钮实现真正的跳转。
+        let link = NSButton(
+            title: "GitHub",
+            target: self,
+            action: #selector(openRepository)
+        )
+        link.isBordered = false
+        link.attributedTitle = NSAttributedString(
             string: "GitHub",
             attributes: [
-                .link: URL(string: "https://github.com/dongdaoguang/cpsmart")!,
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium)
+                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .cursor: NSCursor.pointingHand
             ]
-        ))
+        )
+        link.toolTip = repositoryURL.absoluteString
         footer.addArrangedSubview(signature)
         footer.addArrangedSubview(link)
         return footer
+    }
+
+    private var repositoryURL: URL {
+        URL(string: "https://github.com/dongdaoguang/cpsmart")!
+    }
+
+    @objc private func openRepository() {
+        NSWorkspace.shared.open(repositoryURL)
     }
 
     // MARK: 工具
