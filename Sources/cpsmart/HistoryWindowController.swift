@@ -1004,7 +1004,7 @@ final class HistoryWindowController: NSWindowController,
         if let boardID = selectedPinboardID,
            let board = pinboards.first(where: { $0.id == boardID }) {
             allEntries = board.entries
-            searchField.placeholderString = "搜索“\(board.name)”"
+            searchField.placeholderString = "在“\(board.name)”中搜索"
             refilter(selectingID: selectedID, fallbackIndex: selectedIndex)
         } else if selectedPinboardID != nil {
             selectedPinboardID = nil
@@ -1385,7 +1385,7 @@ final class HistoryWindowController: NSWindowController,
         if let pinboardID,
            let board = pinboards.first(where: { $0.id == pinboardID }) {
             allEntries = board.entries
-            searchField.placeholderString = "搜索“\(board.name)”"
+            searchField.placeholderString = "在“\(board.name)”中搜索"
         } else {
             selectedPinboardID = nil
             allEntries = historyEntries
