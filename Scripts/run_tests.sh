@@ -26,6 +26,7 @@ CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" swiftc \
     "$PROJECT_DIR/Sources/cpsmart/SearchFilter.swift" \
     "$PROJECT_DIR/Sources/cpsmart/ThumbnailProvider.swift" \
     "$PROJECT_DIR/Sources/cpsmart/AdaptivePreviewSizing.swift" \
+    "$PROJECT_DIR/Sources/cpsmart/UpdateSupport.swift" \
     "$PROJECT_DIR/Sources/cpsmart/KeyboardShortcuts.swift" \
     "$PROJECT_DIR/Scripts/core_tests.swift" \
     -o "$BUILD_DIR/cpsmartCoreTests"
