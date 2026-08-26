@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Foundation
 
 enum AccessibilityPermissionSupport {
@@ -29,8 +28,7 @@ enum AccessibilityPermissionSupport {
         }
     }
 
-    static func requestAndOpenSettings() {
-        _ = CGRequestPostEventAccess()
+    static func openSettings() {
         NSWorkspace.shared.open(settingsURL)
     }
 }

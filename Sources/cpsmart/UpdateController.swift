@@ -301,11 +301,9 @@ final class UpdateController {
                     if !opened {
                         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
                     }
-                    self.showInformation(
-                        title: "cpsmart \(releaseVersion) 已下载",
-                        message: UpdateSupport.installationInstructions(
-                            installerOpened: opened
-                        )
+                    self.showDownloadedUpdate(
+                        version: releaseVersion,
+                        installerOpened: opened
                     )
                 case let .failure(error):
                     self.writeDiagnostic("downloadError=\(error.localizedDescription)")
@@ -357,6 +355,20 @@ final class UpdateController {
         alert.alertStyle = .informational
         alert.addButton(withTitle: "好")
         runModal(alert)
+    }
+
+    private func showDownloadedUpdate(version: String, installerOpened: Bool) {
+        let alert = NSAlert()
+        alert.messageText = "cpsmart \(version) 已下载"
+        alert.informativeText = UpdateSupport.installationInstructions(
+            installerOpened: installerOpened
+        )
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "退出 cpsmart")
+        alert.addButton(withTitle: "稍后")
+        if runModal(alert) == .alertFirstButtonReturn {
+            NSApp.terminate(nil)
+        }
     }
 
     private func showError(_ error: Error) {

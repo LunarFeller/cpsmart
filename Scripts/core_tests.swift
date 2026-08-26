@@ -151,9 +151,9 @@ struct CoreTests {
         let openedInstructions = UpdateSupport.installationInstructions(installerOpened: true)
         let savedInstructions = UpdateSupport.installationInstructions(installerOpened: false)
         try require(
-            openedInstructions.contains("1. 从菜单栏退出当前 cpsmart")
-                && openedInstructions.contains("重置旧权限并打开设置")
-                && openedInstructions.contains("亲自开启权限开关"),
+            openedInstructions.contains("1. 点击下方“退出 cpsmart”")
+                && openedInstructions.contains("打开正确页面并自动退出")
+                && openedInstructions.contains("点击“+”添加 /Applications/cpsmart.app"),
             "downloaded update instructions did not explain installation and optional permission repair"
         )
         try require(
