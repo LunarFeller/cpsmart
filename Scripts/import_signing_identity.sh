@@ -1,0 +1,31 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 /path/to/cpsmart-release-signing.p12" >&2
+    exit 2
+fi
+
+P12_PATH="$1"
+if [[ ! -f "$P12_PATH" ]]; then
+    echo "Signing identity backup not found: $P12_PATH" >&2
+    exit 2
+fi
+
+LOGIN_KEYCHAIN="$(security login-keychain -d user | tr -d ' \"')"
+if [[ -z "$LOGIN_KEYCHAIN" || ! -f "$LOGIN_KEYCHAIN" ]]; then
+    echo "Unable to locate the current user's login keychain" >&2
+    exit 1
+fi
+
+echo "macOS will ask for the .p12 export password in a secure system dialog."
+security import \
+    "$P12_PATH" \
+    -k "$LOGIN_KEYCHAIN" \
+    -T /usr/bin/codesign \
+    -T /usr/bin/security
+
+echo
+echo "Available code-signing identities:"
+security find-identity -v -p codesigning "$LOGIN_KEYCHAIN"

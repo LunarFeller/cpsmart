@@ -2039,7 +2039,7 @@ final class HistoryWindowController: NSWindowController,
         let alert = NSAlert()
         alert.messageText = "自动粘贴需要“辅助功能”权限"
         alert.informativeText = """
-        临时签名更新后，macOS 可能仍保留旧版本的权限身份。修复会清除 cpsmart 的旧记录、打开正确的系统设置页面，然后自动退出当前应用。
+        更新或迁移签名后，macOS 可能仍保留旧版本的权限身份。修复会清除 cpsmart 的旧记录、打开正确的系统设置页面，然后自动退出当前应用。
 
         应用退出后：
 
@@ -2050,7 +2050,7 @@ final class HistoryWindowController: NSWindowController,
         macOS 不允许应用替你完成最后的授权开关。
         """
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "重置权限、打开设置并退出")
+        alert.addButton(withTitle: "清除旧记录、打开设置并退出")
         alert.addButton(withTitle: "仅打开设置")
         alert.addButton(withTitle: "稍后")
 

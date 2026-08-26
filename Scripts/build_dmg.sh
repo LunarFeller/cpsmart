@@ -16,21 +16,25 @@ VERSION="${CPSMART_VERSION:-$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")}"
 BUILD_NUMBER="${CPSMART_BUILD_NUMBER:-$(tr -d '[:space:]' < "$PROJECT_DIR/BUILD_NUMBER")}"
 SIGN_IDENTITY="${CPSMART_SIGN_IDENTITY:--}"
 NOTARY_PROFILE="${CPSMART_NOTARY_PROFILE:-}"
-RELEASE_MODE=false
+BUILD_MODE="local"
 
 usage() {
-    echo "Usage: $0 [--local | --release] [--version X.Y.Z] [--build-number N]"
+    echo "Usage: $0 [--local | --self-signed | --release] [--version X.Y.Z] [--build-number N]"
     echo "          [--sign-identity NAME] [--notary-profile PROFILE]"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --local)
-            RELEASE_MODE=false
+            BUILD_MODE="local"
+            shift
+            ;;
+        --self-signed)
+            BUILD_MODE="self-signed"
             shift
             ;;
         --release)
-            RELEASE_MODE=true
+            BUILD_MODE="release"
             shift
             ;;
         --version)
@@ -69,12 +73,20 @@ if [[ ! "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
     echo "Invalid build number '$BUILD_NUMBER'; expected a positive integer" >&2
     exit 2
 fi
-if [[ "$RELEASE_MODE" == true && "$SIGN_IDENTITY" == "-" ]]; then
+if [[ "$BUILD_MODE" == "self-signed" && "$SIGN_IDENTITY" == "-" ]]; then
+    echo "A self-signed release requires --sign-identity with the long-lived cpsmart identity" >&2
+    exit 2
+fi
+if [[ "$BUILD_MODE" == "release" && "$SIGN_IDENTITY" == "-" ]]; then
     echo "A formal release requires --sign-identity with a Developer ID Application identity" >&2
     exit 2
 fi
-if [[ "$RELEASE_MODE" == true && -z "$NOTARY_PROFILE" ]]; then
+if [[ "$BUILD_MODE" == "release" && -z "$NOTARY_PROFILE" ]]; then
     echo "A formal release requires --notary-profile for notarytool" >&2
+    exit 2
+fi
+if [[ "$BUILD_MODE" != "release" && -n "$NOTARY_PROFILE" ]]; then
+    echo "--notary-profile is only valid with --release" >&2
     exit 2
 fi
 
@@ -125,17 +137,35 @@ CLANG_MODULE_CACHE_PATH="$PROJECT_DIR/.build/module-cache-icon" \
     "$ICONSET_DIR" "$RESOURCES_DIR/CPSmartAppIcon.icns"
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-    codesign --force --deep --sign - "$APP_DIR"
+    codesign --force --sign - "$APP_DIR"
+elif [[ "$BUILD_MODE" == "self-signed" ]]; then
+    codesign \
+        --force \
+        --options runtime \
+        --timestamp=none \
+        --sign "$SIGN_IDENTITY" \
+        "$APP_DIR"
 else
     codesign \
         --force \
-        --deep \
         --options runtime \
         --timestamp \
         --sign "$SIGN_IDENTITY" \
         "$APP_DIR"
 fi
 codesign --verify --deep --strict "$APP_DIR"
+
+if [[ "$BUILD_MODE" == "self-signed" ]]; then
+    DESIGNATED_REQUIREMENT="$(codesign --display -r- "$APP_DIR" 2>&1)"
+    if [[ "$DESIGNATED_REQUIREMENT" == *"cdhash"* ]]; then
+        echo "Self-signed release has a version-specific designated requirement; refusing to package" >&2
+        exit 1
+    fi
+    if [[ "$DESIGNATED_REQUIREMENT" != *'identifier "com.cpsmart.app"'* ]]; then
+        echo "Self-signed release does not identify com.cpsmart.app; refusing to package" >&2
+        exit 1
+    fi
+fi
 
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
@@ -150,7 +180,7 @@ hdiutil create \
     -ov \
     "$DMG_PATH"
 
-if [[ "$RELEASE_MODE" == true ]]; then
+if [[ "$BUILD_MODE" == "release" ]]; then
     xcrun notarytool submit \
         "$DMG_PATH" \
         --keychain-profile "$NOTARY_PROFILE" \
@@ -160,5 +190,5 @@ if [[ "$RELEASE_MODE" == true ]]; then
 fi
 
 echo "cpsmart $VERSION (build $BUILD_NUMBER)"
-echo "Mode: $([[ "$RELEASE_MODE" == true ]] && echo release || echo local)"
+echo "Mode: $BUILD_MODE"
 echo "$DMG_PATH"

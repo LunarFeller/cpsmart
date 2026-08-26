@@ -78,7 +78,7 @@ cpsmart 只有在你按 `Return` 或双击卡片自动粘贴时，才需要“�
 
 更新检查只跟随 `dongdaoguang/cpsmart` 的“最新正式 Release”页面来读取版本 Tag，并只接受该仓库 Release 下的 HTTPS DMG 下载地址。它不使用有频率限额的 GitHub API，也不会上传剪贴板历史或其他本地内容。
 
-当前临时签名包的应用身份会随二进制变化，更新后可能需要重新授权辅助功能。此时再次尝试粘贴并选择“重置权限、打开设置并退出”：cpsmart 会通过系统命令只清除自己的旧权限记录、打开正确页面并自动退出。旧记录清除后列表中没有 cpsmart 属于正常现象；点击“+”选择 `/Applications/cpsmart.app`、打开开关，再重新启动应用即可。macOS 不允许应用替用户授予辅助功能权限。
+如果更新后自动粘贴确实失效，再次尝试粘贴并选择“清除旧记录、打开设置并退出”：cpsmart 会通过系统命令只清除自己的旧辅助功能记录、打开正确页面并自动退出。旧记录清除后列表中没有 cpsmart 属于正常现象；仍需点击“+”选择 `/Applications/cpsmart.app`、打开开关，再重新启动应用。macOS 不允许应用替用户完成这一步。正常更新时不要主动清除权限。
 
 ## 使用方式
 
@@ -127,6 +127,15 @@ bash Scripts/build_dmg.sh --local
 dist/cpsmart-<版本>-universal.dmg
 ```
 
+没有 Developer ID 时，可使用由发布者长期保管的固定自签名身份：
+
+```bash
+bash Scripts/build_dmg.sh --self-signed \
+  --sign-identity "cpsmart Release Signing"
+```
+
+普通用户不需要创建或安装证书。固定自签名只能帮助不同版本保持代码身份，不能替代 Developer ID、公证或 Gatekeeper 信任。证书的创建、加密备份、协作者导入和跨版本权限验证见 [`docs/SELF_SIGNED_RELEASE.md`](docs/SELF_SIGNED_RELEASE.md)。
+
 正式签名和公证包：
 
 ```bash
@@ -135,7 +144,7 @@ bash Scripts/build_dmg.sh --release \
   --notary-profile "cpsmart-notary"
 ```
 
-正式模式会拒绝临时签名，并使用 `notarytool` 提交 DMG、等待结果和装订公证票据。签名证书和公证凭据必须保存在开发者的钥匙串中，不能提交到仓库。
+Developer ID 正式模式会拒绝临时签名，并使用 `notarytool` 提交 DMG、等待结果和装订公证票据。固定自签名模式不会提交公证。任何签名证书、私钥、`.p12` 和公证凭据都不能提交到仓库。
 
 ## 发布流程
 

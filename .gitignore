@@ -2,3 +2,7 @@
 build/
 dist/
 .DS_Store
+*.p12
+*.pfx
+*.key
+*.pem
