@@ -102,6 +102,9 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // fullSizeContentView 下内容会延伸到标题栏区域；顶部留出 28pt，
+        // 滚动时内容才不会压到左上角的红绿灯按钮（与快捷键设置页一致）。
+        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 0, bottom: 10, right: 0)
 
         let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
@@ -143,8 +146,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
 
             contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 32),
             contentStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -32),
-            // 顶部留出标题栏高度（fullSizeContentView 下内容从窗口顶开始）
-            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 56),
+            // 顶部留白 = contentInsets(28) + 此处 26，与设置页一致
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 26),
             contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -24)
         ])
         return background

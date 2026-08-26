@@ -112,6 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         self?.historyWindow.showDemoPreview(at: index)
                     }
                 }
+                if let sessionIndex = CommandLine.arguments.firstIndex(of: "--demo-preview-session"),
+                   CommandLine.arguments.indices.contains(sessionIndex + 1),
+                   let index = Int(CommandLine.arguments[sessionIndex + 1]) {
+                    let logURL = URL(fileURLWithPath: "/tmp/cpsmart-preview-session.log")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                        self?.historyWindow.runDemoPreviewSession(textIndex: index, logURL: logURL)
+                    }
+                }
                 if let snapshotIndex = CommandLine.arguments.firstIndex(of: "--demo-snapshot"),
                    CommandLine.arguments.indices.contains(snapshotIndex + 1) {
                     let snapshotURL = URL(

@@ -819,6 +819,9 @@ final class HistoryWindowController: NSWindowController,
     private var mouseMonitor: Any?
     private var quickLookPreviewURL: URL?
     private var isPositioningQuickLookPanel = false
+    /// 预览会话：Space 开启后方向键浏览会持续预览文本/图片；
+    /// 切到文件只是暂时无预览，切回文本/图片时恢复。Space/Esc 或关闭窗口才结束会话。
+    private var isPreviewSessionActive = false
     private var activationObserver: NSObjectProtocol?
     private var systemThemeObserver: NSObjectProtocol?
     private var shortcutObserver: NSObjectProtocol?
@@ -1378,9 +1381,8 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func switchSource(to pinboardID: UUID?) {
-        // 切换数据源后原预览指向的条目可能已不在列表中，先关闭再重建状态。
-        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
-        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        // 切换数据源后原预览指向的条目可能已不在列表中，先结束预览会话再重建状态。
+        endPreviewSession(restoreBrowsingFocus: false)
         selectedPinboardID = pinboardID
         if let pinboardID,
            let board = pinboards.first(where: { $0.id == pinboardID }) {
@@ -1762,22 +1764,32 @@ final class HistoryWindowController: NSWindowController,
     }
 
     private func togglePreview() {
-        if isAdaptivePreviewVisible {
-            closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: true)
-            return
-        }
-        if isQuickLookVisible {
-            closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+        if isPreviewSessionActive {
+            endPreviewSession(restoreBrowsingFocus: true)
             return
         }
 
+        isPreviewSessionActive = true
         if showAdaptivePreviewIfSupported() {
             return
         }
         // 文件不提供预览：Quick Look 对多数文件只展示图标，价值低，
-        // 而且面板尺寸异步重算会产生明显闪动。
+        // 而且面板尺寸异步重算会产生明显闪动。会话保持开启，
+        // 继续按方向键切到文本/图片时会恢复预览。
         statusLabel.stringValue = "文件没有预览 · 双击直接粘贴"
         statusLabel.textColor = palette.textSecondary
+    }
+
+    /// 结束预览会话：Space/Esc 显式关闭、窗口收起或切换数据源时调用。
+    /// 会话结束后方向键浏览不再自动恢复预览。
+    private func endPreviewSession(restoreBrowsingFocus: Bool) {
+        isPreviewSessionActive = false
+        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        if restoreBrowsingFocus {
+            window?.makeKeyAndOrderFront(nil)
+            focusCollectionView()
+        }
     }
 
     private func showAdaptivePreviewIfSupported() -> Bool {
@@ -1805,10 +1817,10 @@ final class HistoryWindowController: NSWindowController,
         return didShow
     }
 
-    /// 选择变化后让预览跟随当前条目：文本/图片保持轻量气泡；文件不提供预览，
-    /// 选中文件时只关闭当前预览。锚点未就绪时有限重试。
+    /// 选择变化后让预览跟随当前条目：会话内文本/图片保持轻量气泡；文件不提供预览，
+    /// 选中文件时只暂时关闭预览，会话保持，切回文本/图片自动恢复。锚点未就绪时有限重试。
     private func syncPreviewWithSelection(retriesRemaining: Int = 3) {
-        guard isAdaptivePreviewVisible || isQuickLookVisible else { return }
+        guard isPreviewSessionActive else { return }
         // scrollToItems 的布局在当前事件尾部才稳定；等布局完成后再换锚点。
         DispatchQueue.main.async { [weak self] in
             guard let self,
@@ -2087,6 +2099,31 @@ final class HistoryWindowController: NSWindowController,
         switchSource(to: pinboards[index].id)
     }
 
+    /// 开发用：验证预览会话——文本开预览 → 右移到文件（预览暂关、会话保持）
+    /// → 左移回文本（预览自动恢复）。
+    func runDemoPreviewSession(textIndex: Int, logURL: URL) {
+        guard visibleEntries.indices.contains(textIndex),
+              visibleEntries.indices.contains(textIndex + 1) else { return }
+        var lines: [String] = []
+        selectAndChoose(index: textIndex, notifyWhenUnchanged: true)
+        togglePreview()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            guard let self else { return }
+            lines.append("open text: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+            self.moveSelection(by: 1)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self else { return }
+                lines.append("-> file: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+                self.moveSelection(by: -1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    guard let self else { return }
+                    lines.append("-> text: pop=\(self.isAdaptivePreviewVisible) ql=\(self.isQuickLookVisible) session=\(self.isPreviewSessionActive)")
+                    try? lines.joined(separator: "\n").write(to: logURL, atomically: true, encoding: .utf8)
+                }
+            }
+        }
+    }
+
     /// 开发用：直接渲染浮窗内容，避免多屏坐标和窗口共享策略影响自动截图。
     @discardableResult
     func writeDemoSnapshot(to url: URL) -> Bool {
@@ -2132,8 +2169,7 @@ final class HistoryWindowController: NSWindowController,
         dismissalGeneration += 1
         let generation = dismissalGeneration
         removeKeyboardMonitor()
-        closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
-        closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+        endPreviewSession(restoreBrowsingFocus: false)
         thumbnailProvider.cancelAll()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = Theme.exitDuration
@@ -2209,7 +2245,7 @@ final class HistoryWindowController: NSWindowController,
             switch shortcutMatcher.action(for: event, context: .quickLook) {
             case .toggleQuickLook, .clearSearchOrClose:
                 if !event.isARepeat {
-                    closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: true)
+                    endPreviewSession(restoreBrowsingFocus: true)
                 }
                 return true
             case .selectPrevious:
@@ -2228,7 +2264,7 @@ final class HistoryWindowController: NSWindowController,
             switch shortcutMatcher.action(for: event, context: .quickLook) {
             case .toggleQuickLook, .clearSearchOrClose:
                 if !event.isARepeat {
-                    closeQuickLookIfNeeded(restoreBrowsingFocus: true)
+                    endPreviewSession(restoreBrowsingFocus: true)
                 }
             case .selectPrevious:
                 // moveSelection 内部已经同步预览；不要再调一次 syncPreviewWithSelection——
@@ -2291,7 +2327,10 @@ final class HistoryWindowController: NSWindowController,
         case .filterFiles:
             applyFilterShortcut(segment: 3)
         case .clearSearchOrClose:
-            if !query.isEmpty {
+            if isPreviewSessionActive {
+                // 会话内选中文件时没有可见预览，Esc 仍应先结束预览会话。
+                endPreviewSession(restoreBrowsingFocus: true)
+            } else if !query.isEmpty {
                 clearSearch()
             } else {
                 dismiss(restorePreviousApplication: true)
