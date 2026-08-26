@@ -154,6 +154,42 @@ private final class PinboardTabButton: NSButton {
         return size
     }
 
+    /// 无边框按钮默认把内容贴左绘制；背景、边框、内容全部在 draw 里手动居中绘制，
+    /// 避免依赖 updateLayer 的调用时机。
+    override func draw(_ dirtyRect: NSRect) {
+        let fill: NSColor
+        if isSelectedTab {
+            fill = (tintColor ?? palette.accent).withAlphaComponent(0.18)
+        } else if isHovered {
+            fill = palette.cardFillHover
+        } else {
+            fill = palette.cardFill
+        }
+        let pill = NSBezierPath(roundedRect: bounds, xRadius: 7, yRadius: 7)
+        fill.setFill()
+        pill.fill()
+        if isDropHighlighted {
+            dropHighlightColor.setStroke()
+            pill.lineWidth = 2
+            pill.stroke()
+        }
+
+        guard let cell else { return }
+        let contentSize = cell.cellSize
+        guard contentSize.width > 0, contentSize.height > 0,
+              contentSize.width < bounds.width else {
+            super.draw(dirtyRect)
+            return
+        }
+        let centered = NSRect(
+            x: (bounds.width - contentSize.width) / 2,
+            y: (bounds.height - contentSize.height) / 2,
+            width: contentSize.width,
+            height: contentSize.height
+        )
+        cell.draw(withFrame: centered, in: self)
+    }
+
     /// 扁平药丸样式：未选中只有浅底，选中用收藏板颜色淡填，不再使用系统边框。
     func applyStyle(palette: Palette, selected: Bool, tint: NSColor?) {
         self.palette = palette
@@ -193,20 +229,6 @@ private final class PinboardTabButton: NSButton {
     override func mouseExited(with event: NSEvent) {
         isHovered = false
         needsDisplay = true
-    }
-
-    override func updateLayer() {
-        layer?.cornerRadius = 7
-        if isSelectedTab {
-            let base = tintColor ?? palette.accent
-            layer?.backgroundColor = base.withAlphaComponent(0.18).cgColor
-        } else if isHovered {
-            layer?.backgroundColor = palette.cardFillHover.cgColor
-        } else {
-            layer?.backgroundColor = palette.cardFill.cgColor
-        }
-        layer?.borderWidth = isDropHighlighted ? 2 : 0
-        layer?.borderColor = dropHighlightColor.cgColor
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -249,6 +271,80 @@ private final class PinboardTabButton: NSButton {
     private func setDropHighlighted(_ isHighlighted: Bool) {
         isDropHighlighted = isHighlighted
         needsDisplay = true
+    }
+}
+
+/// 新建收藏板用的色点行选择器：直接点选颜色，选中项带描边圈。
+private final class PinboardColorPickerView: NSView {
+    private(set) var selectedIndex: Int = 0 {
+        didSet { updateSelection() }
+    }
+
+    private var buttons: [NSButton] = []
+
+    init(colors: [NSColor], names: [String]) {
+        super.init(frame: .zero)
+        let stack = NSStackView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.orientation = .horizontal
+        stack.spacing = 10
+        for (index, color) in colors.enumerated() {
+            let button = NSButton(
+                image: Self.dotImage(color, diameter: 16),
+                target: self,
+                action: #selector(choose(_:))
+            )
+            button.tag = index
+            button.isBordered = false
+            button.wantsLayer = true
+            button.toolTip = index < names.count ? names[index] : nil
+            button.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 22),
+                button.heightAnchor.constraint(equalToConstant: 22)
+            ])
+            buttons.append(button)
+            stack.addArrangedSubview(button)
+        }
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(equalToConstant: 22)
+        ])
+        updateSelection()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func select(index: Int) {
+        guard buttons.indices.contains(index) else { return }
+        selectedIndex = index
+    }
+
+    private func updateSelection() {
+        for (index, button) in buttons.enumerated() {
+            let selected = index == selectedIndex
+            button.layer?.cornerRadius = 11
+            button.layer?.borderWidth = selected ? 2 : 0
+            button.layer?.borderColor = NSColor.labelColor.withAlphaComponent(0.55).cgColor
+        }
+    }
+
+    @objc private func choose(_ sender: NSButton) {
+        selectedIndex = sender.tag
+    }
+
+    private static func dotImage(_ color: NSColor, diameter: CGFloat) -> NSImage {
+        let image = NSImage(size: NSSize(width: diameter, height: diameter))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: diameter - 2, height: diameter - 2)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
     }
 }
 
@@ -917,7 +1013,7 @@ final class HistoryWindowController: NSWindowController,
             refilter(fallbackIndex: 0)
         }
         rebuildPinboardTabs()
-        refreshQuickLookIfNeeded()
+        syncPreviewWithSelection()
     }
 
     // MARK: 界面搭建
@@ -977,16 +1073,16 @@ final class HistoryWindowController: NSWindowController,
         filterControl.selectedSegment = 0
 
         favoriteButton.translatesAutoresizingMaskIntoConstraints = false
-        favoriteButton.title = "收藏到…"
         favoriteButton.image = NSImage(
             systemSymbolName: "star",
             accessibilityDescription: "收藏到收藏板"
         )
-        favoriteButton.imagePosition = .imageLeading
+        favoriteButton.imagePosition = .imageOnly
         favoriteButton.bezelStyle = .roundRect
         favoriteButton.controlSize = .small
         favoriteButton.target = self
         favoriteButton.action = #selector(showFavoriteMenu(_:))
+        favoriteButton.toolTip = "收藏到收藏板"
 
         statusLabel.font = .systemFont(ofSize: 10.5, weight: .medium)
         statusLabel.alignment = .right
@@ -1117,7 +1213,7 @@ final class HistoryWindowController: NSWindowController,
                 equalTo: statusLabel.leadingAnchor, constant: -14
             ),
             favoriteButton.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
-            favoriteButton.widthAnchor.constraint(equalToConstant: 88),
+            favoriteButton.widthAnchor.constraint(equalToConstant: 34),
 
             filterControl.trailingAnchor.constraint(equalTo: favoriteButton.leadingAnchor, constant: -8),
             filterControl.centerYAnchor.constraint(equalTo: headerContainer.centerYAnchor),
@@ -1148,12 +1244,12 @@ final class HistoryWindowController: NSWindowController,
         }
 
         let historyButton = makeBoardButton(
-            title: "历史记录",
+            title: "最近",
             color: nil,
             isSelected: selectedPinboardID == nil,
             action: #selector(selectHistoryTab(_:))
         )
-        historyButton.toolTip = "动态剪贴板历史"
+        historyButton.toolTip = "最近复制的剪贴板历史"
         boardStackView.addArrangedSubview(historyButton)
 
         for board in pinboards {
@@ -1319,28 +1415,26 @@ final class HistoryWindowController: NSWindowController,
 
         let nameField = NSTextField(string: "")
         nameField.placeholderString = "名称，例如：常用命令"
-        // 颜色直接用色点选择，比文字列表更直观。
-        let colorPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        for color in PinboardColor.allCases {
-            let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            item.image = Self.pinboardColorDot(palette.pinboardColor(color), diameter: 12)
-            item.toolTip = color.displayName
-            colorPopup.menu?.addItem(item)
-        }
-        colorPopup.selectItem(at: pinboards.count % PinboardColor.allCases.count)
+        // 颜色直接点选色点，选中项带描边圈，比弹出菜单更直观。
+        let colorPicker = PinboardColorPickerView(
+            colors: PinboardColor.allCases.map { palette.pinboardColor($0) },
+            names: PinboardColor.allCases.map(\.displayName)
+        )
+        colorPicker.select(index: pinboards.count % PinboardColor.allCases.count)
 
-        let form = NSStackView(views: [nameField, colorPopup])
+        let form = NSStackView(views: [nameField, colorPicker])
         form.orientation = .vertical
-        form.spacing = 8
-        form.frame = NSRect(x: 0, y: 0, width: 280, height: 58)
+        form.alignment = .leading
+        form.spacing = 10
+        form.frame = NSRect(x: 0, y: 0, width: 280, height: 62)
         alert.accessoryView = form
         alert.window.initialFirstResponder = nameField
 
-        alert.beginSheetModal(for: window) { [weak self, weak nameField, weak colorPopup] response in
+        alert.beginSheetModal(for: window) { [weak self, weak nameField, weak colorPicker] response in
             guard response == .alertFirstButtonReturn,
                   let self,
                   let name = nameField?.stringValue,
-                  let selectedIndex = colorPopup?.indexOfSelectedItem,
+                  let selectedIndex = colorPicker?.selectedIndex,
                   PinboardColor.allCases.indices.contains(selectedIndex) else {
                 return
             }
@@ -1434,6 +1528,17 @@ final class HistoryWindowController: NSWindowController,
         }
 
         let menu = NSMenu()
+        // 菜单标题让用户明确这个动作是"收藏到某块板"，而不是凭空出现的列表。
+        let header = NSMenuItem(title: "收藏到收藏板", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(
+            string: "收藏到收藏板",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.secondaryLabelColor
+            ]
+        )
+        menu.addItem(header)
         for board in pinboards {
             let item = NSMenuItem(
                 title: board.name,
@@ -1441,6 +1546,7 @@ final class HistoryWindowController: NSWindowController,
                 keyEquivalent: ""
             )
             item.target = self
+            item.image = Self.pinboardColorDot(palette.pinboardColor(board.color))
             item.representedObject = board.id.uuidString
             menu.addItem(item)
         }
@@ -1565,8 +1671,9 @@ final class HistoryWindowController: NSWindowController,
         }
         if visibleEntries.isEmpty {
             closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
         } else {
-            refreshAdaptivePreviewIfNeeded()
+            syncPreviewWithSelection()
         }
     }
 
@@ -1576,12 +1683,13 @@ final class HistoryWindowController: NSWindowController,
             ? "匹配 \(visibleEntries.count) / \(allEntries.count)"
             : "\(allEntries.count) 项"
 
-        favoriteButton.isHidden = selectedPinboardID != nil || visibleEntries.isEmpty
+        // 按钮常驻避免布局跳动；收藏板视图下没有可收藏的对象，置灰即可。
+        favoriteButton.isEnabled = selectedPinboardID == nil && !visibleEntries.isEmpty
 
         if allEntries.isEmpty {
             emptyLabel.stringValue = selectedPinboardID == nil
                 ? "还没有记录 · 先复制一些文本、图片或文件"
-                : "这个收藏板还是空的 · 回到历史记录选择内容并收藏"
+                : "这个收藏板还是空的 · 回到“最近”选择内容并收藏"
             emptyLabel.isHidden = false
         } else if visibleEntries.isEmpty {
             emptyLabel.stringValue = query.isEmpty
@@ -1693,40 +1801,40 @@ final class HistoryWindowController: NSWindowController,
         }
     }
 
-    private func refreshAdaptivePreviewIfNeeded(retriesRemaining: Int = 3) {
-        guard isAdaptivePreviewVisible else { return }
+    /// 选择变化后让预览跟随当前条目：文本/图片保持轻量气泡，文件保持大屏 Quick Look。
+    /// 两种模式之间双向切换，锚点未就绪时有限重试，绝不把文本/图片错误地留在大屏里。
+    private func syncPreviewWithSelection(retriesRemaining: Int = 3) {
+        guard isAdaptivePreviewVisible || isQuickLookVisible else { return }
         // scrollToItems 的布局在当前事件尾部才稳定；等布局完成后再换锚点。
         DispatchQueue.main.async { [weak self] in
             guard let self,
                   self.window?.isVisible == true,
-                  self.isAdaptivePreviewVisible,
                   self.visibleEntries.indices.contains(self.selectedIndex) else { return }
             let entry = self.visibleEntries[self.selectedIndex]
-            guard AdaptivePreviewController.supports(entry: entry) else {
-                // 文件仍走完整 Quick Look；从文本/图片切到文件时平滑切换预览模式。
-                self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
-                self.showQuickLook()
+
+            if AdaptivePreviewController.supports(entry: entry) {
+                // showAdaptivePreviewIfSupported 内部会先关掉 Quick Look。
+                if !self.showAdaptivePreviewIfSupported(), retriesRemaining > 0 {
+                    // 快速切换时新卡片可能尚未滚动到位、锚点视图还没生成，稍后重试。
+                    self.syncPreviewWithSelection(retriesRemaining: retriesRemaining - 1)
+                }
                 return
             }
-            if !self.showAdaptivePreviewIfSupported(), retriesRemaining > 0 {
-                // 快速切换时新卡片可能尚未滚动到位、锚点视图还没生成；
-                // 稍后重试，但绝不能因此把轻量预览退化成大屏 Quick Look。
-                self.refreshAdaptivePreviewIfNeeded(retriesRemaining: retriesRemaining - 1)
+
+            // 文件走完整 Quick Look。
+            self.closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: false)
+            if self.isQuickLookVisible {
+                guard self.prepareQuickLookPreview(),
+                      let panel = QLPreviewPanel.shared() else {
+                    self.closeQuickLookIfNeeded(restoreBrowsingFocus: false)
+                    return
+                }
+                panel.reloadData()
+                self.positionQuickLookPanel(panel)
+            } else {
+                self.showQuickLook()
             }
         }
-    }
-
-    /// 鼠标点选、键盘切换或收藏板刷新后，让已打开的 Quick Look 跟随当前选择。
-    private func refreshQuickLookIfNeeded() {
-        guard isQuickLookVisible else { return }
-        guard visibleEntries.indices.contains(selectedIndex),
-              prepareQuickLookPreview(),
-              let panel = QLPreviewPanel.shared() else {
-            closeQuickLookIfNeeded(restoreBrowsingFocus: false)
-            return
-        }
-        panel.reloadData()
-        positionQuickLookPanel(panel)
     }
 
     private func closeAdaptivePreviewIfNeeded(restoreBrowsingFocus: Bool) {
@@ -1880,7 +1988,7 @@ final class HistoryWindowController: NSWindowController,
         collectionView.scrollToItems(at: [indexPath], scrollPosition: .centeredHorizontally)
         suppressSelectionCallback = false
         chooseEntry(at: index)
-        refreshAdaptivePreviewIfNeeded()
+        syncPreviewWithSelection()
     }
 
     private func chooseEntry(at index: Int) {
@@ -2131,10 +2239,10 @@ final class HistoryWindowController: NSWindowController,
                 }
             case .selectPrevious:
                 moveSelection(by: -1)
-                refreshQuickLookIfNeeded()
+                syncPreviewWithSelection()
             case .selectNext:
                 moveSelection(by: 1)
-                refreshQuickLookIfNeeded()
+                syncPreviewWithSelection()
             default:
                 break
             }
@@ -2367,7 +2475,6 @@ final class HistoryWindowController: NSWindowController,
         guard !suppressSelectionCallback, let indexPath = indexPaths.first else { return }
         selectedIndex = indexPath.item
         chooseEntry(at: indexPath.item)
-        refreshAdaptivePreviewIfNeeded()
-        refreshQuickLookIfNeeded()
+        syncPreviewWithSelection()
     }
 }

@@ -285,7 +285,8 @@ private final class ShortcutRowView: NSView {
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
-    private let modifiedLabel = NSTextField(labelWithString: "已修改")
+    private let modifiedBadge = NSView()
+    private let modifiedBadgeLabel = NSTextField(labelWithString: "已修改")
     private let resetButton = NSButton()
     private let feedbackContainer = NSView()
     private let feedbackIcon = NSImageView()
@@ -315,15 +316,21 @@ private final class ShortcutRowView: NSView {
         copy.spacing = 2
         copy.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        modifiedLabel.font = .systemFont(ofSize: 9.5, weight: .semibold)
-        modifiedLabel.alignment = .center
-        modifiedLabel.translatesAutoresizingMaskIntoConstraints = false
-        modifiedLabel.wantsLayer = true
-        modifiedLabel.isHidden = true
-        modifiedLabel.setAccessibilityLabel("已修改")
+        // 徽标用容器加居中约束实现；直接拉高 NSTextField 会让文字贴顶。
+        modifiedBadge.translatesAutoresizingMaskIntoConstraints = false
+        modifiedBadge.wantsLayer = true
+        modifiedBadge.isHidden = true
+        modifiedBadge.setAccessibilityElement(true)
+        modifiedBadge.setAccessibilityLabel("已修改")
+        modifiedBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        modifiedBadgeLabel.font = .systemFont(ofSize: 9.5, weight: .semibold)
+        modifiedBadgeLabel.alignment = .center
+        modifiedBadge.addSubview(modifiedBadgeLabel)
         NSLayoutConstraint.activate([
-            modifiedLabel.widthAnchor.constraint(equalToConstant: 42),
-            modifiedLabel.heightAnchor.constraint(equalToConstant: 20)
+            modifiedBadge.widthAnchor.constraint(equalToConstant: 42),
+            modifiedBadge.heightAnchor.constraint(equalToConstant: 20),
+            modifiedBadgeLabel.centerXAnchor.constraint(equalTo: modifiedBadge.centerXAnchor),
+            modifiedBadgeLabel.centerYAnchor.constraint(equalTo: modifiedBadge.centerYAnchor)
         ])
 
         resetButton.title = "恢复"
@@ -339,7 +346,7 @@ private final class ShortcutRowView: NSView {
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         copy.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        let body = NSStackView(views: [copy, spacer, modifiedLabel, resetButton, recorder])
+        let body = NSStackView(views: [copy, spacer, modifiedBadge, resetButton, recorder])
         body.translatesAutoresizingMaskIntoConstraints = false
         body.orientation = .horizontal
         body.alignment = .centerY
@@ -399,9 +406,9 @@ private final class ShortcutRowView: NSView {
         self.palette = palette
         titleLabel.textColor = palette.textPrimary
         detailLabel.textColor = palette.textSecondary
-        modifiedLabel.textColor = palette.accent
-        modifiedLabel.layer?.backgroundColor = palette.cardFillSelected.cgColor
-        modifiedLabel.layer?.cornerRadius = 6
+        modifiedBadgeLabel.textColor = palette.accent
+        modifiedBadge.layer?.backgroundColor = palette.cardFillSelected.cgColor
+        modifiedBadge.layer?.cornerRadius = 6
         recorder.applyPalette(palette)
         if feedbackKind == .success { feedbackLabel.textColor = .systemGreen }
         if feedbackKind == .error { feedbackLabel.textColor = .systemRed }
@@ -409,7 +416,7 @@ private final class ShortcutRowView: NSView {
 
     func update(bindings: [ShortcutGesture], customized: Bool) {
         recorder.updateDisplay(bindings)
-        modifiedLabel.isHidden = !customized
+        modifiedBadge.isHidden = !customized
         resetButton.isHidden = !customized
     }
 
@@ -639,7 +646,9 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 10, right: 0)
+        // fullSizeContentView 下内容会延伸到标题栏区域；顶部留出 28pt，
+        // 滚动时内容才不会压到左上角的红绿灯按钮。
+        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 0, bottom: 10, right: 0)
 
         let documentView = FlippedShortcutSettingsView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
@@ -727,7 +736,7 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
 
             contentStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 34),
             contentStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -34),
-            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 54),
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 26),
             contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -24)
         ])
         return backdrop
