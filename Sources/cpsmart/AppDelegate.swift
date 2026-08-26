@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let shortcutStore = ShortcutStore()
+    private let updateController = UpdateController()
     private lazy var historyWindow = HistoryWindowController(shortcutStore: shortcutStore)
     private lazy var aboutWindow = AboutWindowController(shortcutStore: shortcutStore)
     private lazy var shortcutSettingsWindow = ShortcutSettingsWindowController(
@@ -21,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pauseMenuItem: NSMenuItem!
     private var loginMenuItem: NSMenuItem!
     private var appearanceMenuItem: NSMenuItem!
+    private var checkForUpdatesMenuItem: NSMenuItem!
+    private var automaticUpdatesMenuItem: NSMenuItem!
 
     #if DEBUG
     private var demoPinboardStore: PinboardStore?
@@ -41,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureShortcutSettings()
         configureStatusItem()
         configureClipboardMonitor()
+        updateController.onStateChange = { [weak self] in
+            self?.refreshUpdateMenuItems()
+        }
 
         // 演示模式（仅 DEBUG）：跳过快捷键注册，避免与正在运行的正式版冲突。
         let isDemoMode = CommandLine.arguments.contains("--demo-data")
@@ -49,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !isDemoMode {
             registerInitialGlobalHotKey()
+            updateController.startAutomaticChecks()
         }
 
         // Useful for automated UI smoke tests without requiring Accessibility permission.
@@ -60,6 +67,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--show-about") {
             DispatchQueue.main.async { [weak self] in
                 self?.aboutWindow.show()
+            }
+        }
+        // Useful for packaged update-check smoke tests; the installed bundle provides the version
+        // that is compared with the latest stable GitHub Release.
+        if CommandLine.arguments.contains("--check-for-updates") {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateController.checkForUpdates()
             }
         }
         if shouldShowShortcutSettings {
@@ -339,6 +353,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clearAllItem.keyEquivalentModifierMask = [.option]
         menu.addItem(clearAllItem)
         menu.addItem(.separator())
+
+        checkForUpdatesMenuItem = NSMenuItem(
+            title: updateController.menuItemTitle,
+            action: #selector(checkForUpdates),
+            keyEquivalent: ""
+        )
+        menu.addItem(checkForUpdatesMenuItem)
+
+        automaticUpdatesMenuItem = NSMenuItem(
+            title: "自动检查更新",
+            action: #selector(toggleAutomaticUpdates),
+            keyEquivalent: ""
+        )
+        menu.addItem(automaticUpdatesMenuItem)
+        menu.addItem(.separator())
+
         menu.addItem(NSMenuItem(
             title: "关于 cpsmart",
             action: #selector(showAbout),
@@ -368,6 +398,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         openHistoryMenuItem.title = openHistoryMenuTitle
         pauseMenuItem.state = monitor.isPaused ? .on : .off
         loginMenuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        refreshUpdateMenuItems()
+    }
+
+    private func refreshUpdateMenuItems() {
+        guard checkForUpdatesMenuItem != nil, automaticUpdatesMenuItem != nil else { return }
+        checkForUpdatesMenuItem.title = updateController.menuItemTitle
+        checkForUpdatesMenuItem.isEnabled = updateController.activity == .idle
+        automaticUpdatesMenuItem.state = updateController.automaticChecksEnabled ? .on : .off
     }
 
     @objc private func selectAppearanceMode(_ sender: NSMenuItem) {
@@ -585,6 +623,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showAbout() {
         aboutWindow.show()
+    }
+
+    @objc private func checkForUpdates() {
+        updateController.checkForUpdates()
+    }
+
+    @objc private func toggleAutomaticUpdates() {
+        updateController.setAutomaticChecksEnabled(!updateController.automaticChecksEnabled)
+        refreshUpdateMenuItems()
     }
 
     @objc private func quit() {

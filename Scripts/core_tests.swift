@@ -33,6 +33,7 @@ struct CoreTests {
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
         try testAdaptivePreviewSizing()
+        try testUpdateSupport()
         try testShortcutDefaultsAndValidation()
         try testShortcutPersistenceAndReset()
         try testShortcutResetAndSwap()
@@ -135,6 +136,69 @@ struct CoreTests {
             secondaryQuickLookFrame.midX == secondaryVisible.midX
                 && secondaryQuickLookFrame.midY == secondaryVisible.midY,
             "Quick Look frame was not centered on the selected display"
+        )
+    }
+
+    private static func testUpdateSupport() throws {
+        let current = try requireValue(AppVersion("1.8.0"), "current version was not parsed")
+        let newer = try requireValue(AppVersion("v1.10.0"), "release tag was not parsed")
+        let equivalent = try requireValue(AppVersion("1.8"), "short version was not parsed")
+        try require(current < newer, "semantic version comparison used string ordering")
+        try require(current == equivalent, "equivalent versions compared as different")
+        try require(AppVersion("1.8-beta") == nil, "prerelease version was accepted")
+
+        let officialAsset = GitHubReleaseAsset(
+            name: "cpsmart-1.10.0-universal.dmg",
+            browserDownloadURL: URL(
+                string: "https://github.com/dongdaoguang/cpsmart/releases/download/v1.10.0/cpsmart-1.10.0-universal.dmg"
+            )!
+        )
+        let release = try requireValue(
+            GitHubRelease(
+                latestReleaseURL: URL(
+                    string: "https://github.com/dongdaoguang/cpsmart/releases/tag/v1.10.0"
+                )!
+            ),
+            "official latest-release redirect was not parsed"
+        )
+        try require(
+            release.installerAsset == officialAsset,
+            "universal installer URL was not derived from the release tag"
+        )
+        try require(
+            UpdateSupport.isTrustedReleaseDownloadURL(officialAsset.browserDownloadURL),
+            "official GitHub Release URL was rejected"
+        )
+        try require(
+            !UpdateSupport.isTrustedReleaseDownloadURL(URL(string: "https://example.com/source.dmg")!),
+            "untrusted update host was accepted"
+        )
+        try require(
+            GitHubRelease(latestReleaseURL: URL(string: "https://example.com/releases/tag/v9.0.0")!) == nil,
+            "untrusted latest-release redirect was accepted"
+        )
+        try require(
+            GitHubRelease(
+                latestReleaseURL: URL(
+                    string: "https://github.com/dongdaoguang/cpsmart/releases/tag/archive/v9.0.0"
+                )!
+            ) == nil,
+            "nested release path was accepted as a version tag"
+        )
+
+        let negativeOriginVisibleFrame = NSRect(x: -1512, y: 80, width: 1512, height: 900)
+        let alertFrame = UpdateSupport.centeredWindowFrame(
+            windowSize: NSSize(width: 520, height: 260),
+            visibleFrame: negativeOriginVisibleFrame
+        )
+        try require(
+            negativeOriginVisibleFrame.contains(alertFrame),
+            "update alert escaped a negative-origin secondary display"
+        )
+        try require(
+            alertFrame.midX == negativeOriginVisibleFrame.midX
+                && alertFrame.midY == negativeOriginVisibleFrame.midY,
+            "update alert was not centered on the selected display"
         )
     }
 
