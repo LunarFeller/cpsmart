@@ -182,8 +182,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let self else { return }
             self.monitor.write(entry.payload)
         }
-        historyWindow.onPaste = { [weak self] targetApplication in
-            self?.pasteController.paste(to: targetApplication) ?? .targetUnavailable
+        historyWindow.onPaste = { [weak self] entry, targetApplication in
+            guard let self else { return .targetUnavailable }
+            let entryID = entry.id
+            return self.pasteController.paste(to: targetApplication) { [weak self] in
+                self?.store.promote(id: entryID)
+            }
         }
         historyWindow.onDelete = { [weak self] entry in
             guard let self else { return }

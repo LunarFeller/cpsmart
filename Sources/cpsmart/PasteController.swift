@@ -8,7 +8,10 @@ enum PasteStartResult {
 }
 
 final class PasteController {
-    func paste(to targetApplication: NSRunningApplication?) -> PasteStartResult {
+    func paste(
+        to targetApplication: NSRunningApplication?,
+        onPastePosted: (() -> Void)? = nil
+    ) -> PasteStartResult {
         guard let targetApplication,
               !targetApplication.isTerminated,
               targetApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
@@ -25,30 +28,39 @@ final class PasteController {
         ) else {
             return .targetUnavailable
         }
-        postPasteWhenApplicationIsActive(targetApplication, remainingAttempts: 12)
+        postPasteWhenApplicationIsActive(
+            targetApplication,
+            remainingAttempts: 12,
+            onPastePosted: onPastePosted
+        )
         return .started
     }
 
     private func postPasteWhenApplicationIsActive(
         _ application: NSRunningApplication,
-        remainingAttempts: Int
+        remainingAttempts: Int,
+        onPastePosted: (() -> Void)?
     ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
             guard let self else { return }
+            guard !application.isTerminated else { return }
             let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
             if frontmostPID == application.processIdentifier || remainingAttempts == 0 {
-                self.postCommandV(to: application.processIdentifier)
+                if self.postCommandV(to: application.processIdentifier) {
+                    onPastePosted?()
+                }
             } else if remainingAttempts > 0 {
                 application.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
                 self.postPasteWhenApplicationIsActive(
                     application,
-                    remainingAttempts: remainingAttempts - 1
+                    remainingAttempts: remainingAttempts - 1,
+                    onPastePosted: onPastePosted
                 )
             }
         }
     }
 
-    private func postCommandV(to processID: pid_t) {
+    private func postCommandV(to processID: pid_t) -> Bool {
         guard let source = CGEventSource(stateID: .combinedSessionState),
               let keyDown = CGEvent(
                   keyboardEventSource: source,
@@ -60,12 +72,13 @@ final class PasteController {
                   virtualKey: CGKeyCode(kVK_ANSI_V),
                   keyDown: false
               ) else {
-            return
+            return false
         }
 
         keyDown.flags = [.maskCommand]
         keyUp.flags = [.maskCommand]
         keyDown.postToPid(processID)
         keyUp.postToPid(processID)
+        return true
     }
 }

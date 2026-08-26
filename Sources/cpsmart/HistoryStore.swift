@@ -78,13 +78,16 @@ final class HistoryStore {
         return entry
     }
 
-    func promote(_ entry: ClipboardEntry) {
+    @discardableResult
+    func promote(id: UUID) -> Bool {
+        guard let entry = entries.first(where: { $0.id == id }) else { return false }
         entries.removeAll { $0.id == entry.id || $0.payload == entry.payload }
         entries.insert(
             ClipboardEntry(
                 id: entry.id,
                 payload: entry.payload,
-                createdAt: now(),
+                createdAt: entry.createdAt,
+                lastUsedAt: now(),
                 sourceAppName: entry.sourceAppName,
                 sourceAppBundleID: entry.sourceAppBundleID,
                 isPinned: entry.isPinned
@@ -93,6 +96,7 @@ final class HistoryStore {
         )
         trimToLimits()
         save()
+        return true
     }
 
     func togglePin(id: UUID) {
@@ -102,6 +106,7 @@ final class HistoryStore {
             id: entry.id,
             payload: entry.payload,
             createdAt: entry.createdAt,
+            lastUsedAt: entry.lastUsedAt,
             sourceAppName: entry.sourceAppName,
             sourceAppBundleID: entry.sourceAppBundleID,
             isPinned: entry.isPinned == true ? false : true
@@ -135,7 +140,7 @@ final class HistoryStore {
                value: -keepDays,
                to: now()
            ) {
-            entries.removeAll { $0.isPinned != true && $0.createdAt < cutoff }
+            entries.removeAll { $0.isPinned != true && $0.recencyDate < cutoff }
         }
 
         while entries.count > maximumEntryCount,
@@ -158,7 +163,7 @@ final class HistoryStore {
             if lhsIsPinned != rhsIsPinned {
                 return lhsIsPinned
             }
-            return lhs.createdAt > rhs.createdAt
+            return lhs.recencyDate > rhs.recencyDate
         }
     }
 

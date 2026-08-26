@@ -20,6 +20,7 @@ struct CoreTests {
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
         try testDeduplication(in: temporaryDirectory)
+        try testUsagePromotion(in: temporaryDirectory)
         try testPersistence(in: temporaryDirectory)
         try testLimits(in: temporaryDirectory)
         try testRemoveAndClear(in: temporaryDirectory)
@@ -153,6 +154,105 @@ struct CoreTests {
         try require(
             store.entries.first?.createdAt == Date(timeIntervalSince1970: 3),
             "promoted entry timestamp was not refreshed"
+        )
+    }
+
+    private static func testUsagePromotion(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("usage-promotion.json")
+        var currentDate = Date(timeIntervalSince1970: 4)
+        let store = HistoryStore(
+            fileURL: URL,
+            maximumEntryCount: 20,
+            maximumStorageBytes: 10_000,
+            userDefaults: testDefaults,
+            now: { currentDate }
+        )
+        let oldest = store.add(
+            .text("oldest"),
+            sourceAppName: "Terminal",
+            sourceAppBundleID: "com.apple.Terminal",
+            at: Date(timeIntervalSince1970: 1)
+        )
+        let middle = store.add(.text("middle"), at: Date(timeIntervalSince1970: 2))
+        store.add(.text("newest"), at: Date(timeIntervalSince1970: 3))
+
+        try require(store.promote(id: oldest.id), "existing history entry was not promoted")
+        try require(
+            store.entries.map(\.payload) == [
+                .text("oldest"),
+                .text("newest"),
+                .text("middle")
+            ],
+            "used history entry did not become the most recently used item"
+        )
+        try require(
+            store.entries.first?.id == oldest.id
+                && store.entries.first?.createdAt == Date(timeIntervalSince1970: 1)
+                && store.entries.first?.lastUsedAt == currentDate
+                && store.entries.first?.sourceAppName == "Terminal"
+                && store.entries.first?.sourceAppBundleID == "com.apple.Terminal",
+            "usage promotion did not preserve copy metadata or record the usage time"
+        )
+
+        currentDate = Date(timeIntervalSince1970: 5)
+        try require(store.promote(id: middle.id), "second history entry was not promoted")
+        try require(
+            store.entries.map(\.payload) == [
+                .text("middle"),
+                .text("oldest"),
+                .text("newest")
+            ],
+            "repeated usage did not maintain LRU ordering"
+        )
+
+        let beforeMissingPromotion = store.entries
+        try require(
+            !store.promote(id: UUID()) && store.entries == beforeMissingPromotion,
+            "unknown entry was inserted into recent history during promotion"
+        )
+
+        let reloaded = HistoryStore(
+            fileURL: URL,
+            maximumEntryCount: 20,
+            maximumStorageBytes: 10_000,
+            userDefaults: testDefaults
+        )
+        try require(
+            reloaded.entries.map(\.payload) == [
+                .text("middle"),
+                .text("oldest"),
+                .text("newest")
+            ] && reloaded.entries.first?.lastUsedAt == currentDate,
+            "LRU ordering did not persist after reload"
+        )
+
+        var evictionDate = Date(timeIntervalSince1970: 4)
+        let evictionStore = HistoryStore(
+            fileURL: directory.appendingPathComponent("usage-promotion-eviction.json"),
+            maximumEntryCount: 3,
+            maximumStorageBytes: 10_000,
+            userDefaults: testDefaults,
+            now: { evictionDate }
+        )
+        let evictionOldest = evictionStore.add(
+            .text("oldest"),
+            at: Date(timeIntervalSince1970: 1)
+        )
+        evictionStore.add(.text("least recently used"), at: Date(timeIntervalSince1970: 2))
+        evictionStore.add(.text("newest"), at: Date(timeIntervalSince1970: 3))
+        try require(
+            evictionStore.promote(id: evictionOldest.id),
+            "entry could not be marked as recently used before eviction"
+        )
+        evictionDate = Date(timeIntervalSince1970: 5)
+        evictionStore.add(.text("incoming"), at: evictionDate)
+        try require(
+            evictionStore.entries.map(\.payload) == [
+                .text("incoming"),
+                .text("oldest"),
+                .text("newest")
+            ],
+            "entry limit did not evict the least recently used history item"
         )
     }
 
@@ -439,8 +539,9 @@ struct CoreTests {
         try require(reloaded.entries.count == 1, "old history JSON could not be decoded")
         try require(
             reloaded.entries.first?.sourceAppName == nil
-                && reloaded.entries.first?.sourceAppBundleID == nil,
-            "missing source application fields did not decode as nil"
+                && reloaded.entries.first?.sourceAppBundleID == nil
+                && reloaded.entries.first?.lastUsedAt == nil,
+            "missing optional history fields did not decode as nil"
         )
     }
 
@@ -514,6 +615,14 @@ struct CoreTests {
             store.entries.first?.sourceAppBundleID == "com.example.latest",
             "deduplicated pinned entry did not keep the latest source application"
         )
+
+        let unpinnedNewest = store.entries.first(where: { $0.payload == .text("newest") })!
+        store.promote(id: unpinnedNewest.id)
+        try require(
+            store.entries.first?.isPinned == true
+                && store.entries.first(where: { $0.isPinned != true })?.payload == .text("newest"),
+            "LRU promotion moved an unpinned entry ahead of the pinned group"
+        )
     }
 
     private static func testPinnedEntriesSurviveLimitsAndClear(in directory: URL) throws {
@@ -578,8 +687,9 @@ struct CoreTests {
         )
         try require(reloaded.entries.count == 1, "history JSON without isPinned did not decode")
         try require(
-            reloaded.entries.first?.isPinned == nil,
-            "missing isPinned field did not decode as nil"
+            reloaded.entries.first?.isPinned == nil
+                && reloaded.entries.first?.lastUsedAt == nil,
+            "missing pin and usage fields did not decode as nil"
         )
     }
 
@@ -695,6 +805,36 @@ struct CoreTests {
             reloaded.entries.first?.payload == .text("permanent")
                 && reloaded.entries.first?.isPinned == true,
             "keepDays removed a pinned entry"
+        )
+
+        let recentlyUsedURL = directory.appendingPathComponent("recently-used-expiration.json")
+        let recentlyUsedSeed = HistoryStore(
+            fileURL: recentlyUsedURL,
+            maximumEntryCount: 20,
+            maximumStorageBytes: 10_000,
+            keepDays: 0,
+            userDefaults: testDefaults,
+            now: { referenceDate }
+        )
+        let oldButUsed = recentlyUsedSeed.add(
+            .text("old copy, recent use"),
+            at: referenceDate.addingTimeInterval(-30 * 24 * 60 * 60)
+        )
+        recentlyUsedSeed.promote(id: oldButUsed.id)
+
+        let recentlyUsedReloaded = HistoryStore(
+            fileURL: recentlyUsedURL,
+            maximumEntryCount: 20,
+            maximumStorageBytes: 10_000,
+            userDefaults: settings,
+            now: { referenceDate }
+        )
+        try require(
+            recentlyUsedReloaded.entries.first?.id == oldButUsed.id
+                && recentlyUsedReloaded.entries.first?.createdAt
+                    == referenceDate.addingTimeInterval(-30 * 24 * 60 * 60)
+                && recentlyUsedReloaded.entries.first?.lastUsedAt == referenceDate,
+            "keepDays removed an old copy that was used recently"
         )
     }
 

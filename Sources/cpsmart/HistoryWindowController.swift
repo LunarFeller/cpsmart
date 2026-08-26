@@ -612,7 +612,7 @@ private final class HistoryCollectionItem: NSCollectionViewItem {
         titleLabel.textColor = palette.textPrimary
         metaRightLabel.textColor = palette.textTertiary
 
-        metaRightLabel.stringValue = Self.relativeDate.string(for: entry.createdAt) ?? "刚刚"
+        metaRightLabel.stringValue = Self.relativeDate.string(for: entry.recencyDate) ?? "刚刚"
         pinImageView.isHidden = entry.isPinned != true
         pinImageView.contentTintColor = palette.accent
         configureSourceApp(entry)
@@ -774,7 +774,7 @@ final class HistoryWindowController: NSWindowController,
     NSDraggingSource
 {
     var onChoose: ((ClipboardEntry) -> Void)?
-    var onPaste: ((NSRunningApplication?) -> PasteStartResult)?
+    var onPaste: ((ClipboardEntry, NSRunningApplication?) -> PasteStartResult)?
     var onDelete: ((ClipboardEntry) -> Void)?
     var onTogglePin: ((ClipboardEntry) -> Void)?
     var onCreatePinboard: ((String, PinboardColor) -> Pinboard?)?
@@ -2017,8 +2017,9 @@ final class HistoryWindowController: NSWindowController,
 
     private func confirmAndPaste() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
-        onChoose?(visibleEntries[selectedIndex])
-        let result = onPaste?(pasteTargetApplication) ?? .targetUnavailable
+        let entry = visibleEntries[selectedIndex]
+        onChoose?(entry)
+        let result = onPaste?(entry, pasteTargetApplication) ?? .targetUnavailable
         switch result {
         case .started:
             dismiss(restorePreviousApplication: false)

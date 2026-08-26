@@ -32,6 +32,7 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
     let id: UUID
     let payload: ClipboardPayload
     let createdAt: Date
+    let lastUsedAt: Date?
     let sourceAppName: String?
     let sourceAppBundleID: String?
     let isPinned: Bool?
@@ -40,6 +41,7 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
         id: UUID = UUID(),
         payload: ClipboardPayload,
         createdAt: Date = Date(),
+        lastUsedAt: Date? = nil,
         sourceAppName: String? = nil,
         sourceAppBundleID: String? = nil,
         isPinned: Bool? = nil
@@ -47,9 +49,14 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
         self.id = id
         self.payload = payload
         self.createdAt = createdAt
+        self.lastUsedAt = lastUsedAt
         self.sourceAppName = sourceAppName
         self.sourceAppBundleID = sourceAppBundleID
         self.isPinned = isPinned
+    }
+
+    var recencyDate: Date {
+        max(createdAt, lastUsedAt ?? createdAt)
     }
 }
 
