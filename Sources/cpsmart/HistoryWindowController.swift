@@ -814,6 +814,13 @@ final class HistoryWindowController: NSWindowController,
     private var selectedIndex = 0
     private var previousApplication: NSRunningApplication?
     private var lastExternalApplication: NSRunningApplication?
+
+    /// 粘贴与焦点归还的目标：用户最近一次操作的外部应用。
+    /// 浮窗常驻期间用户可能点击了别的窗口，目标应跟随真实焦点，
+    /// 而不是锁定在浮窗打开的那一刻。
+    private var pasteTargetApplication: NSRunningApplication? {
+        lastExternalApplication ?? previousApplication
+    }
     private var suppressSelectionCallback = false
     private var keyboardMonitor: Any?
     private var mouseMonitor: Any?
@@ -2011,7 +2018,7 @@ final class HistoryWindowController: NSWindowController,
     private func confirmAndPaste() {
         guard visibleEntries.indices.contains(selectedIndex) else { return }
         onChoose?(visibleEntries[selectedIndex])
-        let result = onPaste?(previousApplication) ?? .targetUnavailable
+        let result = onPaste?(pasteTargetApplication) ?? .targetUnavailable
         switch result {
         case .started:
             dismiss(restorePreviousApplication: false)
@@ -2191,9 +2198,9 @@ final class HistoryWindowController: NSWindowController,
             window?.alphaValue = 1
             self.isDismissing = false
             if restorePreviousApplication,
-               let previousApplication = self.previousApplication,
-               previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                previousApplication.activate(options: [.activateIgnoringOtherApps])
+               let targetApplication = self.pasteTargetApplication,
+               targetApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                targetApplication.activate(options: [.activateIgnoringOtherApps])
             }
             self.previousApplication = nil
         })
