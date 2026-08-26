@@ -142,7 +142,7 @@ bash Scripts/build_dmg.sh --release \
 1. 更新 `VERSION`、`BUILD_NUMBER` 和 `CHANGELOG.md`。
 2. 运行编译和测试。
 3. 构建并验证正式 DMG。
-4. 提交发布改动并创建带说明的 Tag，例如 `v1.7.0`。
+4. 提交发布改动并创建带说明的 Tag，例如 `v1.9.0`。
 5. 推送分支和 Tag，在 GitHub 创建正式 Release（不要标记为 Pre-release）。
 6. 上传名称形如 `cpsmart-<版本>-universal.dmg` 的 DMG，粘贴对应版本的更新日志和本页安装说明。内置更新器会读取版本 Tag 并优先选择这个 Universal DMG。
 

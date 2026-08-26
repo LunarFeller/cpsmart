@@ -141,9 +141,9 @@ struct CoreTests {
     }
 
     private static func testUpdateSupport() throws {
-        let current = try requireValue(AppVersion("1.8.0"), "current version was not parsed")
+        let current = try requireValue(AppVersion("1.9.0"), "current version was not parsed")
         let newer = try requireValue(AppVersion("v1.10.0"), "release tag was not parsed")
-        let equivalent = try requireValue(AppVersion("1.8"), "short version was not parsed")
+        let equivalent = try requireValue(AppVersion("1.9"), "short version was not parsed")
         try require(current < newer, "semantic version comparison used string ordering")
         try require(current == equivalent, "equivalent versions compared as different")
         try require(AppVersion("1.8-beta") == nil, "prerelease version was accepted")
