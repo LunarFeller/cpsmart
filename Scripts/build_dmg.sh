@@ -115,8 +115,13 @@ build_architecture() {
         --configuration release \
         --product cpsmart \
         --triple "$architecture-apple-macosx13.0" \
-        --scratch-path "$scratch_path"
-    echo "$scratch_path/$architecture-apple-macosx/release/cpsmart"
+        --scratch-path "$scratch_path" >&2 || return 1
+    local binary_path="$scratch_path/$architecture-apple-macosx/release/cpsmart"
+    if [[ ! -x "$binary_path" ]]; then
+        echo "Missing $architecture build product: $binary_path" >&2
+        return 1
+    fi
+    echo "$binary_path"
 }
 
 X86_BINARY="$(build_architecture x86_64 | tail -n 1)"

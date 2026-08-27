@@ -1,13 +1,19 @@
 import AppKit
 import Carbon
 import Foundation
+#if canImport(cpsmart)
+@testable import cpsmart
+#endif
 
-@main
-struct CoreTests {
+enum CoreTestSupport {
     private static let testDefaultsSuiteName = "cpsmartCoreTests-\(UUID().uuidString)"
     private static let testDefaults = UserDefaults(suiteName: testDefaultsSuiteName)!
 
-    static func main() throws {
+    static func resetDefaults() {
+        testDefaults.removePersistentDomain(forName: testDefaultsSuiteName)
+    }
+
+    static func runLegacySuite() throws {
         testDefaults.removePersistentDomain(forName: testDefaultsSuiteName)
         defer { testDefaults.removePersistentDomain(forName: testDefaultsSuiteName) }
 
@@ -24,6 +30,8 @@ struct CoreTests {
         try testPersistence(in: temporaryDirectory)
         try testLimits(in: temporaryDirectory)
         try testRemoveAndClear(in: temporaryDirectory)
+        try testRangeSelection()
+        try testDisplayGeometry()
         try testSearchFiltering()
         try testThumbnailProvider()
         try testLegacyHistoryCompatibility(in: temporaryDirectory)
@@ -34,6 +42,7 @@ struct CoreTests {
         try testRetentionPreferences(in: temporaryDirectory)
         try testExpiredEntries(in: temporaryDirectory)
         try testAdaptivePreviewSizing()
+        try testPreviewSessionAndQuickLookStore(in: temporaryDirectory)
         try testUpdateSupport()
         try testShortcutDefaultsAndValidation()
         try testShortcutPersistenceAndReset()
@@ -42,9 +51,183 @@ struct CoreTests {
         try testInvalidShortcutPersistenceFallsBackToDefaults()
         try testPinboardLifecycle(in: temporaryDirectory)
         try testPinboardEntryPersistence(in: temporaryDirectory)
+        try testPinboardBatchOperations(in: temporaryDirectory)
         try testPinboardReordering(in: temporaryDirectory)
         try testPinboardNameValidation(in: temporaryDirectory)
-        print("All cpsmart core tests passed.")
+        try testPinboardInteractionSupport()
+    }
+
+    static func runRangeSelection() throws { try testRangeSelection() }
+    static func runDisplayGeometry() throws { try testDisplayGeometry() }
+    static func runAdaptivePreviewSizing() throws { try testAdaptivePreviewSizing() }
+    static func runPreviewSessionAndQuickLookStore(in directory: URL) throws {
+        try testPreviewSessionAndQuickLookStore(in: directory)
+    }
+    static func runUpdateSupport() throws { try testUpdateSupport() }
+    static func runDeduplication(in directory: URL) throws { try testDeduplication(in: directory) }
+    static func runUsagePromotion(in directory: URL) throws { try testUsagePromotion(in: directory) }
+    static func runPinboardLifecycle(in directory: URL) throws { try testPinboardLifecycle(in: directory) }
+    static func runPinboardEntryPersistence(in directory: URL) throws { try testPinboardEntryPersistence(in: directory) }
+    static func runPinboardBatchOperations(in directory: URL) throws { try testPinboardBatchOperations(in: directory) }
+    static func runPinboardNameValidation(in directory: URL) throws { try testPinboardNameValidation(in: directory) }
+    static func runPinboardInteractionSupport() throws { try testPinboardInteractionSupport() }
+    static func runPinboardReordering(in directory: URL) throws { try testPinboardReordering(in: directory) }
+    static func runPersistence(in directory: URL) throws { try testPersistence(in: directory) }
+    static func runLimits(in directory: URL) throws { try testLimits(in: directory) }
+    static func runRemoveAndClear(in directory: URL) throws { try testRemoveAndClear(in: directory) }
+    static func runSearchFiltering() throws { try testSearchFiltering() }
+    static func runThumbnailProvider() throws { try testThumbnailProvider() }
+    static func runLegacyHistoryCompatibility(in directory: URL) throws { try testLegacyHistoryCompatibility(in: directory) }
+    static func runDeduplicationUsesLatestSourceApplication(in directory: URL) throws { try testDeduplicationUsesLatestSourceApplication(in: directory) }
+    static func runPinBehavior(in directory: URL) throws { try testPinBehavior(in: directory) }
+    static func runPinnedEntriesSurviveLimitsAndClear(in directory: URL) throws { try testPinnedEntriesSurviveLimitsAndClear(in: directory) }
+    static func runPinnedFieldLegacyCompatibility(in directory: URL) throws { try testPinnedFieldLegacyCompatibility(in: directory) }
+    static func runRetentionPreferences(in directory: URL) throws { try testRetentionPreferences(in: directory) }
+    static func runExpiredEntries(in directory: URL) throws { try testExpiredEntries(in: directory) }
+    static func runShortcutDefaultsAndValidation() throws { try testShortcutDefaultsAndValidation() }
+    static func runShortcutPersistenceAndReset() throws { try testShortcutPersistenceAndReset() }
+    static func runShortcutResetAndSwap() throws { try testShortcutResetAndSwap() }
+    static func runShortcutMatcherContexts() throws { try testShortcutMatcherContexts() }
+    static func runInvalidShortcutPersistenceFallsBackToDefaults() throws { try testInvalidShortcutPersistenceFallsBackToDefaults() }
+
+    private static func testRangeSelection() throws {
+        let ids = (0..<6).map { _ in UUID() }
+        var state = HistorySelectionState<UUID>()
+        try require(state.activeID == nil && state.selectedIDs.isEmpty, "selection did not start empty")
+
+        try require(state.selectSingle(ids[2]), "single selection did not report a change")
+        try require(
+            state.activeID == ids[2]
+                && state.anchorID == ids[2]
+                && state.selectedIDs == [ids[2]],
+            "single selection did not set active, anchor, and selected IDs"
+        )
+
+        state.extendSelection(to: ids[5], in: ids)
+        try require(
+            state.activeID == ids[5]
+                && state.anchorID == ids[2]
+                && state.selectedIDs == Set(ids[2...5]),
+            "forward range selection did not preserve its anchor"
+        )
+
+        state.extendSelection(to: ids[1], in: ids)
+        try require(
+            state.activeID == ids[1]
+                && state.anchorID == ids[2]
+                && state.selectedIDs == Set(ids[1...2]),
+            "reverse range selection did not shrink around the original anchor"
+        )
+
+        try require(state.toggle(ids[4], in: ids), "Command-click did not add a visible ID")
+        try require(
+            state.activeID == ids[4]
+                && state.anchorID == ids[4]
+                && state.selectedIDs == Set([ids[1], ids[2], ids[4]]),
+            "Command-click add produced an invalid selection state"
+        )
+        try require(!state.toggle(ids[4], in: ids), "Command-click removal reported an addition")
+        try require(
+            state.activeID == ids[1]
+                && state.selectedIDs == Set([ids[1], ids[2]]),
+            "Command-click removal did not choose the first remaining visible item"
+        )
+
+        state.selectAll(in: ids)
+        try require(
+            state.activeID == ids[1]
+                && state.selectedIDs == Set(ids)
+                && state.anchorID == ids[4],
+            "select all did not preserve the active item and valid anchor"
+        )
+
+        state.reconcile(with: [ids[0], ids[3], ids[5]], fallbackIndex: 1)
+        try require(
+            state.activeID == ids[0]
+                && state.selectedIDs == Set([ids[0], ids[3], ids[5]])
+                && state.anchorID == ids[0],
+            "filter reconciliation did not retain visible selections in visible order"
+        )
+
+        state.reconcile(with: [ids[3], ids[5]], preferredID: ids[5], fallbackIndex: 0)
+        try require(
+            state.activeID == ids[5]
+                && state.selectedIDs == [ids[5]]
+                && state.anchorID == ids[5],
+            "preferred selection did not collapse selection to the requested ID"
+        )
+
+        state.reconcile(with: [], fallbackIndex: 0)
+        try require(
+            state.activeID == nil && state.anchorID == nil && state.selectedIDs.isEmpty,
+            "empty results did not clear selection state"
+        )
+
+        state.selectSingle(ids[3])
+        try require(
+            !state.toggle(ids[3], in: ids)
+                && state.activeID == ids[3]
+                && state.selectedIDs == [ids[3]],
+            "Command-click removed the final selected item"
+        )
+        state.reconcile(with: [ids[5], ids[3]], fallbackIndex: 0)
+        try require(
+            state.activeID == ids[3] && state.selectedIDs == [ids[3]],
+            "reordering visible results changed a retained active selection"
+        )
+
+        state.reset()
+        state.reconcile(with: [ids[0], ids[1]], fallbackIndex: 99)
+        try require(
+            state.activeID == ids[1] && state.selectedIDs == [ids[1]],
+            "selection fallback did not clamp an oversized index"
+        )
+        state.reset()
+        state.reconcile(with: [ids[0], ids[1]], fallbackIndex: -4)
+        try require(
+            state.activeID == ids[0] && state.selectedIDs == [ids[0]],
+            "selection fallback did not clamp a negative index"
+        )
+
+        state.replaceSelection(
+            [ids[0]],
+            activeID: ids[1],
+            anchorID: ids[0],
+            in: ids
+        )
+        try require(
+            state.activeID == ids[1]
+                && state.selectedIDs == Set([ids[0], ids[1]])
+                && state.anchorID == ids[0],
+            "replacement selection allowed the active item to fall outside the selection"
+        )
+    }
+
+    private static func testDisplayGeometry() throws {
+        let frames = [
+            NSRect(x: 0, y: 0, width: 1512, height: 982),
+            NSRect(x: -196, y: 982, width: 1920, height: 1080)
+        ]
+        try require(
+            DisplayGeometry.screenIndex(
+                containing: NSPoint(x: 756, y: 491),
+                frames: frames
+            ) == 0,
+            "mouse location did not resolve to the main display"
+        )
+        try require(
+            DisplayGeometry.screenIndex(
+                containing: NSPoint(x: 764, y: 1522),
+                frames: frames
+            ) == 1,
+            "mouse location did not resolve to the negative-origin secondary display"
+        )
+        let secondaryVisible = NSRect(x: -196, y: 982, width: 1920, height: 1055)
+        try require(
+            DisplayGeometry.historyFrame(visibleFrame: secondaryVisible, height: 248)
+                == NSRect(x: -196, y: 982, width: 1920, height: 248),
+            "history frame did not remain inside the secondary display visible frame"
+        )
     }
 
     private static func testAdaptivePreviewSizing() throws {
@@ -137,6 +320,65 @@ struct CoreTests {
             secondaryQuickLookFrame.midX == secondaryVisible.midX
                 && secondaryQuickLookFrame.midY == secondaryVisible.midY,
             "Quick Look frame was not centered on the selected display"
+        )
+    }
+
+    private static func testPreviewSessionAndQuickLookStore(in directory: URL) throws {
+        var state = HistoryPreviewSessionState()
+        try require(
+            !state.isActive && state.presentation == .none,
+            "preview session did not start inactive"
+        )
+        try require(state.start() && !state.start(), "preview session started more than once")
+        state.recordAdaptiveShown()
+        try require(
+            state.isActive && state.presentation == .adaptive,
+            "adaptive preview was not recorded"
+        )
+        state.recordPresentationClosed()
+        try require(
+            state.isActive && state.presentation == .none,
+            "closing a presentation incorrectly ended its session"
+        )
+        state.recordQuickLookShown()
+        try require(state.presentation == .quickLook, "Quick Look presentation was not recorded")
+        state.recordUnavailable()
+        try require(
+            state.isActive && state.presentation == .unavailable,
+            "unsupported content incorrectly ended its preview session"
+        )
+        state.end()
+        state.recordAdaptiveShown()
+        try require(
+            !state.isActive && state.presentation == .none,
+            "ended preview session accepted a new presentation"
+        )
+
+        let previewDirectory = directory.appendingPathComponent("quick-look", isDirectory: true)
+        let store = QuickLookPreviewStore(directory: previewDirectory)
+        let textEntry = ClipboardEntry(payload: .text("preview text"))
+        let textURL = try requireValue(store.prepare(for: textEntry), "text preview was not written")
+        let textData = try Data(contentsOf: textURL)
+        try require(
+            textURL.pathExtension == "txt" && textData == Data("preview text".utf8),
+            "text Quick Look payload did not preserve its contents"
+        )
+
+        let imageEntry = ClipboardEntry(
+            payload: .image(data: Data([0, 1, 2]), pasteboardType: "public.tiff")
+        )
+        let imageURL = try requireValue(store.prepare(for: imageEntry), "image preview was not written")
+        let imageData = try Data(contentsOf: imageURL)
+        try require(
+            imageURL.pathExtension == "tiff" && imageData == Data([0, 1, 2]),
+            "image Quick Look payload used the wrong extension or contents"
+        )
+
+        try require(
+            store.prepare(for: ClipboardEntry(payload: .files(["/tmp/file"]))) == nil
+                && store.previewURL == nil
+                && !FileManager.default.fileExists(atPath: previewDirectory.path),
+            "unsupported file preview left temporary resources behind"
         )
     }
 
@@ -414,6 +656,50 @@ struct CoreTests {
         )
     }
 
+    private static func testPinboardBatchOperations(in directory: URL) throws {
+        let URL = directory.appendingPathComponent("pinboard-batch.json")
+        let store = PinboardStore(fileURL: URL)
+        let board = try requireValue(
+            store.create(name: "批量收藏", color: .blue),
+            "batch pinboard was not created"
+        )
+        let one = ClipboardEntry(payload: .text("one"))
+        let two = ClipboardEntry(payload: .text("two"))
+        let duplicateOne = ClipboardEntry(payload: .text("one"))
+        try require(
+            store.add([one, two, duplicateOne], to: board.id) == 2,
+            "batch add did not report the number of unique favorites"
+        )
+        try require(
+            store.boards.first?.entries.map(\.payload) == [.text("one"), .text("two")],
+            "batch add did not preserve the visible selection order"
+        )
+
+        let storedEntries = try requireValue(
+            store.boards.first?.entries,
+            "batch favorites disappeared before removal"
+        )
+        let removed = store.removeEntries(ids: Set(storedEntries.map(\.id)), from: board.id)
+        try require(
+            PinboardStore(fileURL: URL).boards.first?.entries.isEmpty == true,
+            "batch favorite removal did not persist"
+        )
+        try require(removed.map(\.index) == [0, 1], "removed favorite indexes were not captured")
+        try require(
+            store.restoreEntries(removed, to: board.id) == 2,
+            "batch favorite undo did not restore every entry"
+        )
+        let restored = try requireValue(
+            PinboardStore(fileURL: URL).boards.first?.entries,
+            "restored batch favorites did not persist"
+        )
+        try require(
+            restored.map(\.id) == storedEntries.map(\.id)
+                && restored.map(\.payload) == [.text("one"), .text("two")],
+            "favorite undo did not preserve identity and order"
+        )
+    }
+
     private static func testPinboardNameValidation(in directory: URL) throws {
         let URL = directory.appendingPathComponent("pinboard-name-validation.json")
         let store = PinboardStore(fileURL: URL)
@@ -430,6 +716,103 @@ struct CoreTests {
         try require(
             !store.rename(id: board.id, to: "   "),
             "blank pinboard rename was accepted"
+        )
+    }
+
+    private static func testPinboardInteractionSupport() throws {
+        let firstEntry = ClipboardEntry(payload: .text("first"))
+        let duplicateEntry = ClipboardEntry(payload: .text("first"))
+        let secondEntry = ClipboardEntry(payload: .text("second"))
+        let board = Pinboard(name: "Board", color: .blue, entries: [firstEntry])
+        let anotherBoard = Pinboard(name: "Another", color: .green)
+
+        var source = PinboardSourceState()
+        try require(source.isHistory, "pinboard source did not start at recent history")
+        try require(
+            source.selectPinboard(board.id, from: [board, anotherBoard]) == board
+                && source.selectedPinboardID == board.id,
+            "valid pinboard source was not selected"
+        )
+        try require(
+            source.reconcile(with: [board]) == board,
+            "selected pinboard did not survive a metadata refresh"
+        )
+        try require(
+            source.reconcile(with: [anotherBoard]) == nil && source.isHistory,
+            "deleted pinboard source did not fall back to recent history"
+        )
+
+        try require(
+            PinboardInteractionSupport.normalizedName("  常用命令  ") == "常用命令"
+                && PinboardInteractionSupport.normalizedName("  \n ") == nil
+                && PinboardInteractionSupport.normalizedName(String(repeating: "名", count: 40))?.count == 30,
+            "pinboard name normalization did not trim, reject blank, or cap length"
+        )
+        try require(
+            PinboardInteractionSupport.addedCount(
+                entries: [duplicateEntry, secondEntry],
+                to: board
+            ) == 1,
+            "pinboard addition count did not ignore an existing payload"
+        )
+        try require(
+            PinboardInteractionSupport.boardID(from: board.id.uuidString) == board.id
+                && PinboardInteractionSupport.boardID(from: "invalid") == nil,
+            "pinboard menu ID parsing accepted an invalid value"
+        )
+        let colorValue = "\(board.id.uuidString)|\(PinboardColor.purple.rawValue)"
+        let parsedColor = PinboardInteractionSupport.boardColor(from: colorValue)
+        try require(
+            parsedColor?.0 == board.id && parsedColor?.1 == .purple,
+            "pinboard menu color value was not parsed"
+        )
+
+        let descriptor = PinboardDragDescriptor(
+            entryID: secondEntry.id,
+            sourcePinboardID: board.id
+        )
+        let pasteboard = NSPasteboard(name: .init("cpsmart-tests-\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([descriptor.pasteboardItem()])
+        try require(
+            PinboardDragDescriptor.read(from: pasteboard) == descriptor,
+            "pinboard drag descriptor did not survive pasteboard serialization"
+        )
+        try require(
+            PinboardDragRules.sourceOperation(sourcePinboardID: nil) == .copy
+                && PinboardDragRules.sourceOperation(sourcePinboardID: board.id) == .move,
+            "pinboard drag source operation did not distinguish copy and move"
+        )
+        try require(
+            PinboardDragRules.canBeginDrag(
+                selectedItemCount: 1,
+                itemIsVisible: true,
+                sourcePinboardID: nil,
+                allowsPinboardReordering: false
+            ),
+            "history drag was incorrectly disabled by a filter"
+        )
+        try require(
+            !PinboardDragRules.canBeginDrag(
+                selectedItemCount: 1,
+                itemIsVisible: true,
+                sourcePinboardID: board.id,
+                allowsPinboardReordering: false
+            ),
+            "filtered pinboard drag incorrectly allowed reordering"
+        )
+        try require(
+            PinboardDragRules.reorderDescriptor(
+                from: pasteboard,
+                targetPinboardID: board.id,
+                allowsPinboardReordering: true
+            ) == descriptor
+                && PinboardDragRules.reorderDescriptor(
+                    from: pasteboard,
+                    targetPinboardID: anotherBoard.id,
+                    allowsPinboardReordering: true
+                ) == nil,
+            "pinboard reorder rules accepted a cross-board drag"
         )
     }
 
@@ -533,6 +916,21 @@ struct CoreTests {
             "removed entry was restored after reload"
         )
 
+        let firstBatchEntry = store.add(.text("batch-one"))
+        let secondBatchEntry = store.add(.text("batch-two"))
+        let removed = store.remove(ids: [firstBatchEntry.id, secondBatchEntry.id])
+        try require(
+            HistoryStore(fileURL: URL, userDefaults: testDefaults).entries.map(\.payload)
+                == [.text("keep")],
+            "batch history removal did not persist"
+        )
+        store.restore(removed)
+        let restoredIDs = HistoryStore(fileURL: URL, userDefaults: testDefaults).entries.map(\.id)
+        try require(
+            restoredIDs.contains(firstBatchEntry.id) && restoredIDs.contains(secondBatchEntry.id),
+            "history undo did not restore the original entry identities"
+        )
+
         store.clear()
         try require(
             HistoryStore(fileURL: URL, userDefaults: testDefaults).entries.isEmpty,
@@ -579,6 +977,37 @@ struct CoreTests {
         try require(
             SearchFilter.filter(entries, query: "年度总结.pdf") == [file],
             "file name search did not match its path"
+        )
+
+        var state = HistoryFilterState()
+        try require(
+            !state.isFiltering
+                && state.allowsPinboardReordering
+                && state.apply(to: entries) == entries,
+            "default filter state unexpectedly filtered or disabled reordering"
+        )
+        state.updateQuery("quick")
+        state.updateType(rawValue: HistoryContentTypeFilter.text.rawValue)
+        try require(
+            state.isFiltering
+                && !state.allowsPinboardReordering
+                && state.apply(to: entries) == [quickFox, quickDog],
+            "query and type filters were not composed"
+        )
+        state.updateType(rawValue: HistoryContentTypeFilter.image.rawValue)
+        try require(
+            state.apply(to: entries).isEmpty,
+            "type filter ignored the active query"
+        )
+        state.updateType(rawValue: 999)
+        try require(
+            state.type == .all && state.apply(to: entries) == [quickFox, quickDog],
+            "invalid filter segment did not fall back to all types"
+        )
+        state.reset()
+        try require(
+            state == HistoryFilterState(),
+            "reset did not restore the default query and type filter"
         )
     }
 

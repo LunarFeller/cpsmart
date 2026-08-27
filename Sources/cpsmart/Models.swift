@@ -60,6 +60,11 @@ struct ClipboardEntry: Codable, Equatable, Identifiable {
     }
 }
 
+struct RemovedClipboardEntry: Equatable {
+    let entry: ClipboardEntry
+    let index: Int
+}
+
 enum PinboardColor: String, Codable, CaseIterable {
     case red
     case orange
