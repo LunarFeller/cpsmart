@@ -1,8 +1,6 @@
-#if DEBUG
 import AppKit
 
-/// 开发用演示数据：配合 `--demo-data` 启动参数弹出含示例内容的浮窗，
-/// 不读写真实历史文件，便于截图审查 UI。仅 DEBUG 编译包含。
+/// 隔离演示数据：DEBUG 模式用于界面审查，正式包仅在安装包自动验证参数下使用。
 enum DemoData {
     static func makeEntries() -> [ClipboardEntry] {
         let now = Date()
@@ -156,4 +154,3 @@ enum DemoData {
         return png
     }
 }
-#endif

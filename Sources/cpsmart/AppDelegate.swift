@@ -1,10 +1,26 @@
 import AppKit
 import Carbon
+import CoreGraphics
 import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let store = HistoryStore()
-    private let pinboardStore = PinboardStore()
+    private enum PendingDeletionUndo {
+        case history([RemovedClipboardEntry])
+        case pinboard(UUID, [RemovedClipboardEntry])
+    }
+
+    private let isPackageSmokeTest = CommandLine.arguments.contains("--package-smoke-test")
+    private let packageSmokeRoot = ProcessInfo.processInfo.environment[
+        "CPSMART_PACKAGE_SMOKE_ROOT"
+    ].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    private lazy var store: HistoryStore = {
+        guard isPackageSmokeTest, let packageSmokeRoot else { return HistoryStore() }
+        return HistoryStore(fileURL: packageSmokeRoot.appendingPathComponent("history.json"))
+    }()
+    private lazy var pinboardStore: PinboardStore = {
+        guard isPackageSmokeTest, let packageSmokeRoot else { return PinboardStore() }
+        return PinboardStore(fileURL: packageSmokeRoot.appendingPathComponent("pinboards.json"))
+    }()
     private let monitor = ClipboardMonitor()
     private let pasteController = PasteController()
     private let shortcutStore = ShortcutStore()
@@ -24,16 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var appearanceMenuItem: NSMenuItem!
     private var checkForUpdatesMenuItem: NSMenuItem!
     private var automaticUpdatesMenuItem: NSMenuItem!
+    private var pendingDeletionUndo: PendingDeletionUndo?
 
-    #if DEBUG
     private var demoPinboardStore: PinboardStore?
     private var demoPinboardFileURL: URL?
-    #endif
 
     private var activePinboardStore: PinboardStore {
-        #if DEBUG
         if let demoPinboardStore { return demoPinboardStore }
-        #endif
         return pinboardStore
     }
 
@@ -43,7 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configureHistoryWindow()
         configureShortcutSettings()
         configureStatusItem()
-        configureClipboardMonitor()
+        if !isPackageSmokeTest {
+            configureClipboardMonitor()
+        }
         updateController.onStateChange = { [weak self] in
             self?.refreshUpdateMenuItems()
         }
@@ -51,11 +66,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 演示模式（仅 DEBUG）：跳过快捷键注册，避免与正在运行的正式版冲突。
         let isDemoMode = CommandLine.arguments.contains("--demo-data")
         let shouldShowShortcutSettings = CommandLine.arguments.contains("--show-shortcut-settings")
-        shouldRegisterGlobalHotKey = !isDemoMode
+        shouldRegisterGlobalHotKey = !isDemoMode && !isPackageSmokeTest
 
-        if !isDemoMode {
+        if !isDemoMode && !isPackageSmokeTest {
             registerInitialGlobalHotKey()
             updateController.startAutomaticChecks()
+        }
+
+        if isPackageSmokeTest {
+            startPackageSmokeTest()
+            return
         }
 
         // Useful for automated UI smoke tests without requiring Accessibility permission.
@@ -118,6 +138,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    CommandLine.arguments.indices.contains(queryIndex + 1) {
                     self.historyWindow.applyDemoQuery(CommandLine.arguments[queryIndex + 1])
                 }
+                if let selectionIndex = CommandLine.arguments.firstIndex(of: "--demo-selection"),
+                   CommandLine.arguments.indices.contains(selectionIndex + 2),
+                   let anchorIndex = Int(CommandLine.arguments[selectionIndex + 1]),
+                   let targetIndex = Int(CommandLine.arguments[selectionIndex + 2]) {
+                    self.historyWindow.applyDemoSelection(
+                        from: anchorIndex,
+                        to: targetIndex
+                    )
+                }
                 if let previewIndex = CommandLine.arguments.firstIndex(of: "--demo-preview-index"),
                    CommandLine.arguments.indices.contains(previewIndex + 1),
                    let index = Int(CommandLine.arguments[previewIndex + 1]) {
@@ -159,13 +188,113 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         #endif
     }
 
+    private func startPackageSmokeTest() {
+        guard let packageSmokeRoot,
+        let reportArgumentIndex = CommandLine.arguments.firstIndex(
+            of: "--package-smoke-report"
+        ), CommandLine.arguments.indices.contains(reportArgumentIndex + 1),
+        let screenArgumentIndex = CommandLine.arguments.firstIndex(
+            of: "--expected-screen-index"
+        ), CommandLine.arguments.indices.contains(screenArgumentIndex + 1),
+        let expectedScreenIndex = Int(CommandLine.arguments[screenArgumentIndex + 1]) else {
+            NSLog("cpsmart package smoke test requires report path and expected screen index")
+            NSApp.terminate(nil)
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: packageSmokeRoot,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+        } catch {
+            NSLog("cpsmart could not create isolated package smoke directory: %@", error.localizedDescription)
+            NSApp.terminate(nil)
+            return
+        }
+
+        monitor.isPaused = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let screens = NSScreen.screens
+            guard screens.indices.contains(expectedScreenIndex) else {
+                NSLog("cpsmart package smoke screen index is unavailable")
+                NSApp.terminate(nil)
+                return
+            }
+            let targetScreen = screens[expectedScreenIndex]
+            let demoPinboardFileURL = packageSmokeRoot.appendingPathComponent(
+                "demo-pinboards.json"
+            )
+            try? FileManager.default.removeItem(at: demoPinboardFileURL)
+            self.demoPinboardFileURL = demoPinboardFileURL
+            self.demoPinboardStore = PinboardStore(
+                fileURL: demoPinboardFileURL,
+                initialBoards: DemoData.makePinboards()
+            )
+            self.store.clearAll()
+            for entry in DemoData.makeEntries() {
+                _ = self.store.add(
+                    entry.payload,
+                    sourceAppName: entry.sourceAppName,
+                    sourceAppBundleID: entry.sourceAppBundleID,
+                    at: entry.createdAt
+                )
+            }
+            let reportURL = URL(
+                fileURLWithPath: CommandLine.arguments[reportArgumentIndex + 1]
+            )
+            func showWhenPointerIsReady(remainingAttempts: Int) {
+                let cocoaPoint = NSPoint(
+                    x: targetScreen.frame.midX,
+                    y: targetScreen.frame.midY
+                )
+                let quartzPoint = CGPoint(
+                    x: cocoaPoint.x,
+                    y: screens[0].frame.maxY - cocoaPoint.y
+                )
+                guard CGWarpMouseCursorPosition(quartzPoint) == .success else {
+                    NSLog("cpsmart package smoke could not position the pointer")
+                    NSApp.terminate(nil)
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    guard let self else { return }
+                    guard targetScreen.frame.contains(NSEvent.mouseLocation) else {
+                        if remainingAttempts > 1 {
+                            showWhenPointerIsReady(remainingAttempts: remainingAttempts - 1)
+                        } else {
+                            NSLog("cpsmart package smoke pointer did not stay on the expected screen")
+                            NSApp.terminate(nil)
+                        }
+                        return
+                    }
+                    // 不传测试专用屏幕参数：必须走正式的“鼠标所在屏幕”定位路径。
+                    self.historyWindow.show(
+                        entries: self.store.entries,
+                        pinboards: self.activePinboardStore.boards
+                    )
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        guard let self else { return }
+                        self.historyWindow.runPackageSmokeValidation(
+                            expectedScreenIndex: expectedScreenIndex,
+                            reportURL: reportURL
+                        ) {
+                            NSApp.terminate(nil)
+                        }
+                    }
+                }
+            }
+            showWhenPointerIsReady(remainingAttempts: 3)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
-        #if DEBUG
         if let demoPinboardFileURL {
             try? FileManager.default.removeItem(at: demoPinboardFileURL)
         }
-        #endif
     }
 
     private func configureApplicationIcon() {
@@ -194,6 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func configureHistoryWindow() {
         historyWindow.onChoose = { [weak self] entry in
             guard let self else { return }
+            guard !self.isPackageSmokeTest else { return }
             self.monitor.write(entry.payload)
         }
         historyWindow.onPaste = { [weak self] entry, targetApplication in
@@ -203,10 +333,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.store.promote(id: entryID)
             }
         }
-        historyWindow.onDelete = { [weak self] entry in
-            guard let self else { return }
-            self.store.remove(id: entry.id)
+        historyWindow.onDelete = { [weak self] entries in
+            guard let self else { return 0 }
+            let removed = self.store.remove(ids: Set(entries.map(\.id)))
+            guard !removed.isEmpty else { return 0 }
+            self.pendingDeletionUndo = .history(removed)
             self.historyWindow.refresh(entries: self.store.entries)
+            return removed.count
+        }
+        historyWindow.onUndoDelete = { [weak self] in
+            guard let self, let pendingDeletionUndo = self.pendingDeletionUndo else { return 0 }
+            switch pendingDeletionUndo {
+            case .history(let removed):
+                self.store.restore(removed)
+                self.historyWindow.refresh(
+                    entries: self.store.entries,
+                    selectingEntryID: removed.first?.entry.id
+                )
+                self.pendingDeletionUndo = nil
+                return removed.count
+            case .pinboard(let boardID, let removed):
+                let store = self.activePinboardStore
+                let restoredCount = store.restoreEntries(removed, to: boardID)
+                guard restoredCount > 0 else { return 0 }
+                self.historyWindow.refresh(pinboards: store.boards)
+                self.pendingDeletionUndo = nil
+                return restoredCount
+            }
         }
         historyWindow.onTogglePin = { [weak self] entry in
             guard let self else { return }
@@ -234,21 +387,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         historyWindow.onDeletePinboard = { [weak self] id in
             guard let self else { return }
+            self.pendingDeletionUndo = nil
+            self.historyWindow.clearDeletionUndo()
             let store = self.activePinboardStore
             store.removeBoard(id: id)
             self.historyWindow.refresh(pinboards: store.boards)
         }
-        historyWindow.onAddToPinboard = { [weak self] entry, boardID in
+        historyWindow.onAddToPinboard = { [weak self] entries, boardID in
             guard let self else { return }
             let store = self.activePinboardStore
-            store.add(entry, to: boardID)
+            store.add(entries, to: boardID)
             self.historyWindow.refresh(pinboards: store.boards)
         }
-        historyWindow.onRemoveFromPinboard = { [weak self] entry, boardID in
-            guard let self else { return }
+        historyWindow.onRemoveFromPinboard = { [weak self] entries, boardID in
+            guard let self else { return 0 }
             let store = self.activePinboardStore
-            store.removeEntry(id: entry.id, from: boardID)
+            let removed = store.removeEntries(ids: Set(entries.map(\.id)), from: boardID)
+            guard !removed.isEmpty else { return 0 }
+            self.pendingDeletionUndo = .pinboard(boardID, removed)
             self.historyWindow.refresh(pinboards: store.boards)
+            return removed.count
         }
         historyWindow.onMovePinboardEntry = { [weak self] entryID, boardID, insertionIndex in
             guard let self else { return }
@@ -609,6 +767,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        pendingDeletionUndo = nil
+        historyWindow.clearDeletionUndo()
         store.clear()
         historyWindow.refresh(entries: store.entries)
     }
@@ -621,6 +781,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.addButton(withTitle: "全部清空")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        pendingDeletionUndo = nil
+        historyWindow.clearDeletionUndo()
         store.clearAll()
         historyWindow.refresh(entries: store.entries)
     }

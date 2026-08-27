@@ -14,6 +14,11 @@ let package = Package(
         .executableTarget(
             name: "cpsmart",
             path: "Sources/cpsmart"
+        ),
+        .testTarget(
+            name: "cpsmartTests",
+            dependencies: ["cpsmart"],
+            path: "Tests/cpsmartTests"
         )
     ]
 )

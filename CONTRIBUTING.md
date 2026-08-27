@@ -9,6 +9,8 @@ swift build
 bash Scripts/run_tests.sh
 ```
 
+安装完整 Xcode 时，测试脚本会运行 SwiftPM 的标准 XCTest 目标；只有 Command Line Tools 的环境缺少 XCTest 模块，脚本才使用兼容运行器执行同一批核心用例。
+
 请从最新的上游 `main` 创建功能分支，不要把任务交接、聊天记录、个人计划或临时截图提交到仓库。README、架构说明、测试方案、构建与发布文档可以随代码一起维护。
 
 ## 从 fork 提交 Pull Request
