@@ -755,6 +755,64 @@ enum CoreTestSupport {
             ) == 1,
             "pinboard addition count did not ignore an existing payload"
         )
+        let directSourceKeys = [
+            UInt16(kVK_ANSI_1), UInt16(kVK_ANSI_2), UInt16(kVK_ANSI_3),
+            UInt16(kVK_ANSI_4), UInt16(kVK_ANSI_5), UInt16(kVK_ANSI_6),
+            UInt16(kVK_ANSI_7), UInt16(kVK_ANSI_8), UInt16(kVK_ANSI_9)
+        ]
+        try require(
+            directSourceKeys.enumerated().allSatisfy { index, keyCode in
+                PinboardShortcutRouting.command(
+                    keyCode: keyCode,
+                    modifiers: [.command, .option]
+                ) == .selectSource(index: index)
+            },
+            "direct pinboard shortcuts did not map 1...9 to recent and the first eight boards"
+        )
+        try require(
+            PinboardShortcutRouting.command(
+                keyCode: UInt16(kVK_Tab),
+                modifiers: [.control]
+            ) == .cycle(offset: 1)
+                && PinboardShortcutRouting.command(
+                    keyCode: UInt16(kVK_Tab),
+                    modifiers: [.control, .shift]
+                ) == .cycle(offset: -1),
+            "pinboard cycle shortcuts did not distinguish forward and backward navigation"
+        )
+        try require(
+            PinboardShortcutRouting.command(
+                keyCode: UInt16(kVK_ANSI_2),
+                modifiers: [.command]
+            ) == nil
+                && PinboardShortcutRouting.command(
+                    keyCode: UInt16(kVK_ANSI_2),
+                    modifiers: [.command, .option, .shift]
+                ) == nil
+                && PinboardShortcutRouting.command(
+                    keyCode: UInt16(kVK_Tab),
+                    modifiers: []
+                ) == nil,
+            "pinboard shortcut routing captured unrelated or extra-modifier key presses"
+        )
+        try require(
+            PinboardShortcutRouting.cycledSourceIndex(
+                currentIndex: 0,
+                sourceCount: 3,
+                offset: -1
+            ) == 2
+                && PinboardShortcutRouting.cycledSourceIndex(
+                    currentIndex: 2,
+                    sourceCount: 3,
+                    offset: 1
+                ) == 0
+                && PinboardShortcutRouting.cycledSourceIndex(
+                    currentIndex: 0,
+                    sourceCount: 0,
+                    offset: 1
+                ) == nil,
+            "pinboard cycling did not wrap or reject an empty source list"
+        )
         try require(
             PinboardInteractionSupport.boardID(from: board.id.uuidString) == board.id
                 && PinboardInteractionSupport.boardID(from: "invalid") == nil,
@@ -1403,6 +1461,27 @@ enum CoreTestSupport {
             ) == .reservedByApplication,
             "standard Command-C editing shortcut was accepted"
         )
+        let directPinboardGesture = ShortcutGesture(
+            keyCode: UInt16(kVK_ANSI_1),
+            modifiers: [.command, .option]
+        )
+        let cyclePinboardGesture = ShortcutGesture(
+            keyCode: UInt16(kVK_Tab),
+            modifiers: [.control]
+        )
+        try require(
+            shortcuts.validate(directPinboardGesture, for: .selectNext)
+                == .reservedByApplication
+                && shortcuts.validate(cyclePinboardGesture, for: .toggleHistory)
+                    == .reservedByApplication,
+            "fixed pinboard shortcuts were accepted by configurable shortcut validation"
+        )
+        try require(
+            shortcuts.set(cyclePinboardGesture, for: .selectNext)
+                == .reservedByApplication
+                && !shortcuts.isCustomized(.selectNext),
+            "a reserved pinboard shortcut was persisted as a configurable binding"
+        )
         try require(
             shortcuts.validate(
                 ShortcutGesture(keyCode: UInt16(kVK_RightArrow)),
@@ -1496,6 +1575,17 @@ enum CoreTestSupport {
                 requestedGesture: globalGesture
             ) == .globalRequiresModifier,
             "swap allowed an unmodified key to become the global shortcut"
+        )
+        try require(
+            shortcuts.validateSwap(
+                .selectPrevious,
+                with: .selectNext,
+                requestedGesture: ShortcutGesture(
+                    keyCode: UInt16(kVK_Tab),
+                    modifiers: [.control]
+                )
+            ) == .reservedByApplication,
+            "swap accepted a fixed pinboard shortcut"
         )
     }
 
@@ -1611,6 +1701,27 @@ enum CoreTestSupport {
         try require(
             shortcuts.primaryBinding(for: .selectPrevious).keyCode == UInt16(kVK_LeftArrow),
             "invalid persisted shortcut did not fall back to the default"
+        )
+
+        struct PersistedShortcuts: Encodable {
+            let version: Int
+            let bindings: [String: [ShortcutGesture]]
+        }
+        let reservedData = try JSONEncoder().encode(PersistedShortcuts(
+            version: 1,
+            bindings: [
+                ShortcutActionID.selectPrevious.rawValue: [ShortcutGesture(
+                    keyCode: UInt16(kVK_ANSI_2),
+                    modifiers: [.command, .option]
+                )]
+            ]
+        ))
+        settings.set(reservedData, forKey: ShortcutStore.defaultsKey)
+        let reservedReloaded = ShortcutStore(userDefaults: settings)
+        try require(
+            reservedReloaded.primaryBinding(for: .selectPrevious).keyCode
+                == UInt16(kVK_LeftArrow),
+            "persisted shortcut conflicting with pinboard navigation did not fall back to default"
         )
     }
 

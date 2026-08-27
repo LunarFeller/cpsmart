@@ -1,5 +1,53 @@
 import AppKit
+import Carbon
 import Foundation
+
+enum PinboardShortcutCommand: Equatable {
+    case selectSource(index: Int)
+    case cycle(offset: Int)
+}
+
+enum PinboardShortcutRouting {
+    private static let directSourceIndexes: [UInt16: Int] = [
+        UInt16(kVK_ANSI_1): 0,
+        UInt16(kVK_ANSI_2): 1,
+        UInt16(kVK_ANSI_3): 2,
+        UInt16(kVK_ANSI_4): 3,
+        UInt16(kVK_ANSI_5): 4,
+        UInt16(kVK_ANSI_6): 5,
+        UInt16(kVK_ANSI_7): 6,
+        UInt16(kVK_ANSI_8): 7,
+        UInt16(kVK_ANSI_9): 8
+    ]
+
+    static func command(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags
+    ) -> PinboardShortcutCommand? {
+        let normalized = modifiers.intersection([.command, .option, .control, .shift])
+        if normalized == [.command, .option],
+           let sourceIndex = directSourceIndexes[keyCode] {
+            return .selectSource(index: sourceIndex)
+        }
+        guard keyCode == UInt16(kVK_Tab), normalized.contains(.control) else { return nil }
+        if normalized == [.control] {
+            return .cycle(offset: 1)
+        }
+        if normalized == [.control, .shift] {
+            return .cycle(offset: -1)
+        }
+        return nil
+    }
+
+    static func cycledSourceIndex(
+        currentIndex: Int,
+        sourceCount: Int,
+        offset: Int
+    ) -> Int? {
+        guard sourceCount > 0, sourceCount > currentIndex, currentIndex >= 0 else { return nil }
+        return (currentIndex + offset % sourceCount + sourceCount) % sourceCount
+    }
+}
 
 struct PinboardSourceState: Equatable {
     private(set) var selectedPinboardID: UUID?

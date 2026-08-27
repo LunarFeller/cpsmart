@@ -4,6 +4,8 @@ import Foundation
 
 struct PackageSmokeSnapshot {
     let visibleEntryIDs: [UUID]
+    let pinboardIDs: [UUID]
+    let selectedPinboardID: UUID?
     let selectedIndex: Int
     let selectedEntryIDs: Set<UUID>
     let hasPendingDeletionUndo: Bool
@@ -53,6 +55,7 @@ private struct PackageSmokeValidationReport: Codable {
     let shiftMouseSelectionCount: Int
     let selectAllSelectionCount: Int
     let shiftKeyboardSelectionCount: Int
+    let pinboardShortcutsPassed: Bool
     let undoDeletePassed: Bool
     let searchPassed: Bool
     let previewPassed: Bool
@@ -66,6 +69,7 @@ final class PackageSmokeValidationDriver {
     private let reportURL: URL
     private let host: PackageSmokeHost
     private let completion: () -> Void
+    private var pinboardShortcutsPassed = false
 
     init(
         expectedScreenIndex: Int,
@@ -127,41 +131,142 @@ final class PackageSmokeValidationDriver {
             return
         }
 
-        runCommandSelectionFlow(itemCount: itemCount) { [self] commandPassed in
-            if !commandPassed {
-                failures.append("Command-click add/remove did not keep selection and active copy in sync")
+        runPinboardShortcutFlow { [self] pinboardPassed in
+            pinboardShortcutsPassed = pinboardPassed
+            if !pinboardPassed {
+                failures.append("pinboard direct or cycle shortcuts did not select the expected source")
             }
-            runPlainClickFlow(itemCount: itemCount) { [self] plainPassed in
-                if !plainPassed {
-                    failures.append("plain mouse selection failed for first, middle, or last card")
+            runCommandSelectionFlow(itemCount: itemCount) { [self] commandPassed in
+                if !commandPassed {
+                    failures.append("Command-click add/remove did not keep selection and active copy in sync")
                 }
-                host.postCardClick(0, [], 1) { [self] _ in
-                    host.postCardClick(itemCount - 1, [.shift], 1) { [self] _ in
-                        let shiftMouseCount = host.snapshot().selectedEntryIDs.count
-                        if shiftMouseCount != itemCount {
-                            failures.append(
-                                "Shift-click selected \(shiftMouseCount) of \(itemCount) cards"
-                            )
-                        }
-                        host.selectIndex(itemCount / 2)
-                        host.postKey(UInt16(kVK_ANSI_A), [.command], "a") { [self] in
-                            let selectAllCount = host.snapshot().selectedEntryIDs.count
-                            if selectAllCount != itemCount {
+                runPlainClickFlow(itemCount: itemCount) { [self] plainPassed in
+                    if !plainPassed {
+                        failures.append("plain mouse selection failed for first, middle, or last card")
+                    }
+                    host.postCardClick(0, [], 1) { [self] _ in
+                        host.postCardClick(itemCount - 1, [.shift], 1) { [self] _ in
+                            let shiftMouseCount = host.snapshot().selectedEntryIDs.count
+                            if shiftMouseCount != itemCount {
                                 failures.append(
-                                    "Command-A selected \(selectAllCount) of \(itemCount) cards"
+                                    "Shift-click selected \(shiftMouseCount) of \(itemCount) cards"
                                 )
                             }
-                            runShiftKeyboardAndRemainingFlow(
-                                itemCount: itemCount,
-                                screens: screens,
-                                actualScreen: actualScreen,
-                                actualScreenIndex: actualScreenIndex,
-                                plainPassed: plainPassed,
-                                commandPassed: commandPassed,
-                                shiftMouseCount: shiftMouseCount,
-                                selectAllCount: selectAllCount,
-                                failures: failures
-                            )
+                            host.selectIndex(itemCount / 2)
+                            host.postKey(UInt16(kVK_ANSI_A), [.command], "a") { [self] in
+                                let selectAllCount = host.snapshot().selectedEntryIDs.count
+                                if selectAllCount != itemCount {
+                                    failures.append(
+                                        "Command-A selected \(selectAllCount) of \(itemCount) cards"
+                                    )
+                                }
+                                runShiftKeyboardAndRemainingFlow(
+                                    itemCount: itemCount,
+                                    screens: screens,
+                                    actualScreen: actualScreen,
+                                    actualScreenIndex: actualScreenIndex,
+                                    plainPassed: plainPassed,
+                                    commandPassed: commandPassed,
+                                    shiftMouseCount: shiftMouseCount,
+                                    selectAllCount: selectAllCount,
+                                    failures: failures
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func runPinboardShortcutFlow(completion: @escaping (Bool) -> Void) {
+        let initialSnapshot = host.snapshot()
+        guard initialSnapshot.pinboardIDs.count >= 2 else {
+            completion(false)
+            return
+        }
+        let firstBoardID = initialSnapshot.pinboardIDs[0]
+        let secondBoardID = initialSnapshot.pinboardIDs[1]
+
+        var checks: [Bool] = []
+
+        func record(_ passed: Bool, _ name: String) {
+            checks.append(passed)
+            if !passed {
+                NSLog("cpsmart package smoke pinboard shortcut check failed: %@", name)
+            }
+        }
+
+        func finishOnRecent() {
+            host.postKey(UInt16(kVK_ANSI_1), [.command, .option], "1") { [self] in
+                let recentSnapshot = host.snapshot()
+                record(
+                    recentSnapshot.selectedPinboardID == nil
+                        && recentSnapshot.visibleEntryIDs.count == recentSnapshot.historyEntryCount,
+                    "direct recent"
+                )
+                completion(checks.allSatisfy { $0 })
+            }
+        }
+
+        func verifyPreviewSwitch() {
+            host.postKey(UInt16(kVK_ANSI_1), [.command, .option], "1") { [self] in
+                host.selectIndex(0)
+                host.postKey(UInt16(kVK_Space), [], " ") { [self] in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [self] in
+                        let opened = host.snapshot().isPreviewSessionActive
+                        host.postKey(UInt16(kVK_ANSI_2), [.command, .option], "2") { [self] in
+                            // NSPopover 关闭带动画；会话状态会立即结束，但视觉状态需要等动画完成。
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [self] in
+                                let switched = host.snapshot()
+                                record(
+                                    opened
+                                        && switched.selectedPinboardID == firstBoardID
+                                        && !switched.isPreviewSessionActive
+                                        && !switched.isAdaptivePreviewVisible
+                                        && !switched.isQuickLookVisible,
+                                    "switch while previewing"
+                                )
+                                finishOnRecent()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        func verifySearchSwitch() {
+            host.postKey(UInt16(kVK_Tab), [], "\t") { [self] in
+                let focused = host.snapshot().isSearchFieldFocused
+                host.postKey(UInt16(kVK_ANSI_G), [], "g") { [self] in
+                    let typed = host.snapshot().query == "g"
+                    host.postKey(UInt16(kVK_ANSI_3), [.command, .option], "3") { [self] in
+                        let switched = host.snapshot()
+                        record(
+                            focused
+                                && typed
+                                && switched.selectedPinboardID == secondBoardID
+                                && switched.query.isEmpty
+                                && !switched.isSearchFieldFocused,
+                            "switch while searching"
+                        )
+                        verifyPreviewSwitch()
+                    }
+                }
+            }
+        }
+
+        host.postKey(UInt16(kVK_ANSI_2), [.command, .option], "2") { [self] in
+            record(host.snapshot().selectedPinboardID == firstBoardID, "direct first board")
+            host.postKey(UInt16(kVK_Tab), [.control], "\t") { [self] in
+                record(host.snapshot().selectedPinboardID == secondBoardID, "cycle first to second")
+                host.postKey(UInt16(kVK_Tab), [.control], "\t") { [self] in
+                    record(host.snapshot().selectedPinboardID == nil, "cycle last to recent")
+                    host.postKey(UInt16(kVK_Tab), [.control, .shift], "\t") { [self] in
+                        record(host.snapshot().selectedPinboardID == secondBoardID, "cycle recent to last")
+                        host.postKey(UInt16(kVK_Tab), [.control, .shift], "\t") { [self] in
+                            record(host.snapshot().selectedPinboardID == firstBoardID, "cycle second to first")
+                            verifySearchSwitch()
                         }
                     }
                 }
@@ -414,6 +519,7 @@ final class PackageSmokeValidationDriver {
             shiftMouseSelectionCount: shiftMouseSelectionCount,
             selectAllSelectionCount: selectAllSelectionCount,
             shiftKeyboardSelectionCount: shiftKeyboardSelectionCount,
+            pinboardShortcutsPassed: pinboardShortcutsPassed,
             undoDeletePassed: undoDeletePassed,
             searchPassed: searchPassed,
             previewPassed: previewPassed,

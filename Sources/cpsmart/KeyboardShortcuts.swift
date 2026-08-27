@@ -249,7 +249,7 @@ enum ShortcutValidationIssue: Equatable {
         case .globalRequiresModifier:
             return "全局快捷键需要包含 ⌘、⌥ 或 ⌃。"
         case .reservedByApplication:
-            return "该组合是 macOS 标准操作，请选择其他快捷键。"
+            return "该组合已被 cpsmart 或 macOS 保留，请选择其他快捷键。"
         case .conflictsWith(let action):
             return "与“\(action.displayName)”的快捷键冲突。"
         }
@@ -484,6 +484,12 @@ final class ShortcutStore: NSObject {
            !ShortcutGesture.isNonTextKey(gesture.keyCode),
            commandLike.isEmpty {
             return .requiresModifier
+        }
+        if PinboardShortcutRouting.command(
+            keyCode: gesture.keyCode,
+            modifiers: gesture.modifiers
+        ) != nil {
+            return .reservedByApplication
         }
         if isReservedSystemShortcut(gesture) {
             return .reservedByApplication

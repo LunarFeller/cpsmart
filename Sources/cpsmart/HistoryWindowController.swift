@@ -587,10 +587,10 @@ final class HistoryWindowController: NSWindowController,
             isSelected: selectedPinboardID == nil,
             action: #selector(selectHistoryTab(_:))
         )
-        historyButton.toolTip = "最近复制的剪贴板历史"
+        historyButton.toolTip = "最近复制的剪贴板历史 · ⌘⌥1 · ⌃Tab 循环切换"
         boardStackView.addArrangedSubview(historyButton)
 
-        for board in pinboards {
+        for (index, board) in pinboards.enumerated() {
             let button = makeBoardButton(
                 title: board.name,
                 color: board.color,
@@ -598,7 +598,8 @@ final class HistoryWindowController: NSWindowController,
                 action: #selector(selectPinboardTab(_:))
             )
             button.identifier = NSUserInterfaceItemIdentifier(board.id.uuidString)
-            button.toolTip = "打开“\(board.name)”；右键可重命名、改色或删除"
+            let shortcutHint = index < 8 ? " · ⌘⌥\(index + 2)" : ""
+            button.toolTip = "打开“\(board.name)”\(shortcutHint)；右键可重命名、改色或删除"
             button.menu = pinboardInteractionCoordinator.makeContextMenu(for: board)
             button.dropHighlightColor = palette.pinboardColor(board.color)
             button.onAcceptHistoryEntry = { [weak self] entryID in
@@ -695,6 +696,41 @@ final class HistoryWindowController: NSWindowController,
         rebuildPinboardTabs()
         refilter(fallbackIndex: 0)
         focusCollectionView()
+    }
+
+    private func handlePinboardShortcut(_ event: NSEvent) -> Bool {
+        guard let command = PinboardShortcutRouting.command(
+            keyCode: event.keyCode,
+            modifiers: event.modifierFlags
+        ) else { return false }
+        guard !event.isARepeat else { return true }
+
+        switch command {
+        case .selectSource(let index):
+            if index == 0 {
+                switchSource(to: nil)
+            } else {
+                let pinboardIndex = index - 1
+                guard pinboards.indices.contains(pinboardIndex) else {
+                    statusLabel.stringValue = "还没有第 \(index) 个收藏板"
+                    statusLabel.textColor = .systemOrange
+                    NSSound.beep()
+                    return true
+                }
+                switchSource(to: pinboards[pinboardIndex].id)
+            }
+        case .cycle(let offset):
+            let currentIndex = selectedPinboardID.flatMap { selectedID in
+                pinboards.firstIndex(where: { $0.id == selectedID }).map { $0 + 1 }
+            } ?? 0
+            guard let targetIndex = PinboardShortcutRouting.cycledSourceIndex(
+                currentIndex: currentIndex,
+                sourceCount: pinboards.count + 1,
+                offset: offset
+            ) else { return true }
+            switchSource(to: targetIndex == 0 ? nil : pinboards[targetIndex - 1].id)
+        }
+        return true
     }
 
     @objc private func createPinboardFromTab(_ sender: NSButton) {
@@ -1289,6 +1325,8 @@ final class HistoryWindowController: NSWindowController,
             snapshot: { [unowned self] in
                 PackageSmokeSnapshot(
                     visibleEntryIDs: visibleEntryIDs,
+                    pinboardIDs: pinboards.map(\.id),
+                    selectedPinboardID: selectedPinboardID,
                     selectedIndex: selectedIndex,
                     selectedEntryIDs: selectedEntryIDs,
                     hasPendingDeletionUndo: hasPendingDeletionUndo,
@@ -1615,6 +1653,10 @@ final class HistoryWindowController: NSWindowController,
         // 浮窗上挂着 sheet（新建/重命名收藏板等）时，键盘属于 sheet 的输入框，
         // 不能按历史窗口的快捷键逻辑拦截，否则名称根本无法输入。
         if window?.attachedSheet != nil { return false }
+
+        // 收藏板切换属于窗口级导航：在浏览、搜索和预览中都应生效，并由
+        // switchSource 统一结束预览、清除筛选和恢复卡片焦点。
+        if handlePinboardShortcut(event) { return true }
 
         if isAdaptivePreviewVisible {
             // 与 Quick Look 使用同一组上下文，确保自定义快捷键在轻量预览中同样生效。

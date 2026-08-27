@@ -12,6 +12,7 @@ private struct SmokeReport: Decodable {
     let shiftMouseSelectionCount: Int
     let selectAllSelectionCount: Int
     let shiftKeyboardSelectionCount: Int
+    let pinboardShortcutsPassed: Bool
     let undoDeletePassed: Bool
     let searchPassed: Bool
     let previewPassed: Bool
@@ -84,11 +85,12 @@ case "verify":
     }
     guard report.expectedScreenIndex == expectedIndex,
           report.actualScreenIndex == expectedIndex,
+          report.pinboardShortcutsPassed,
           report.passed else {
         fail("screen \(expectedIndex) validation failed: \(report.failures.joined(separator: "; "))")
     }
     print(
-        "screen[\(expectedIndex)] passed: screens=\(report.screenCount) scales=\(report.scaleFactors) mouse=\(report.plainMouseSelectionsPassed) commandClick=\(report.commandMouseSelectionsPassed) shiftClick=\(report.shiftMouseSelectionCount) selectAll=\(report.selectAllSelectionCount) shiftKey=\(report.shiftKeyboardSelectionCount) undo=\(report.undoDeletePassed) search=\(report.searchPassed) preview=\(report.previewPassed) doubleClick=\(report.doubleClickPastePassed)"
+        "screen[\(expectedIndex)] passed: screens=\(report.screenCount) scales=\(report.scaleFactors) mouse=\(report.plainMouseSelectionsPassed) commandClick=\(report.commandMouseSelectionsPassed) shiftClick=\(report.shiftMouseSelectionCount) selectAll=\(report.selectAllSelectionCount) shiftKey=\(report.shiftKeyboardSelectionCount) pinboardKeys=\(report.pinboardShortcutsPassed) undo=\(report.undoDeletePassed) search=\(report.searchPassed) preview=\(report.previewPassed) doubleClick=\(report.doubleClickPastePassed)"
     )
 
 default:

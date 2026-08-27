@@ -240,6 +240,8 @@ final class AboutWindowController: NSWindowController, NSWindowDelegate {
             (shortcutStore.displayString(for: .toggleSearchFocus), "在卡片与搜索框之间切换"),
             (shortcutStore.displayString(for: .pasteSelection), "粘贴所选内容到原应用"),
             (shortcutStore.displayString(for: .togglePin), "置顶或取消置顶"),
+            ("⌘⌥1…9", "直接切换最近或前八个收藏板"),
+            ("⌃Tab / ⌃⇧Tab", "向前或向后循环切换收藏板"),
             (shortcutStore.displayString(for: .deleteSelection), "删除所选记录"),
             (shortcutStore.displayString(for: .filterAll), "筛选全部记录"),
             (shortcutStore.displayString(for: .filterText), "筛选文本"),
