@@ -68,10 +68,61 @@ final class PinboardStore {
         return favorite
     }
 
-    func removeEntry(id: UUID, from boardID: UUID) {
-        guard let boardIndex = boards.firstIndex(where: { $0.id == boardID }) else { return }
-        boards[boardIndex].entries.removeAll { $0.id == id }
+    @discardableResult
+    func add(_ entries: [ClipboardEntry], to boardID: UUID) -> Int {
+        guard let boardIndex = boards.firstIndex(where: { $0.id == boardID }) else { return 0 }
+
+        var knownPayloads = boards[boardIndex].entries.map(\.payload)
+        var favorites: [ClipboardEntry] = []
+        for entry in entries where !knownPayloads.contains(entry.payload) {
+            knownPayloads.append(entry.payload)
+            favorites.append(ClipboardEntry(
+                payload: entry.payload,
+                createdAt: Date(),
+                sourceAppName: entry.sourceAppName,
+                sourceAppBundleID: entry.sourceAppBundleID
+            ))
+        }
+        guard !favorites.isEmpty else { return 0 }
+        boards[boardIndex].entries.insert(contentsOf: favorites, at: 0)
         save()
+        return favorites.count
+    }
+
+    func removeEntry(id: UUID, from boardID: UUID) {
+        _ = removeEntries(ids: [id], from: boardID)
+    }
+
+    @discardableResult
+    func removeEntries(ids: Set<UUID>, from boardID: UUID) -> [RemovedClipboardEntry] {
+        guard !ids.isEmpty,
+              let boardIndex = boards.firstIndex(where: { $0.id == boardID }) else { return [] }
+        let removed = boards[boardIndex].entries.enumerated().compactMap { index, entry in
+            ids.contains(entry.id) ? RemovedClipboardEntry(entry: entry, index: index) : nil
+        }
+        guard !removed.isEmpty else { return [] }
+        boards[boardIndex].entries.removeAll { ids.contains($0.id) }
+        save()
+        return removed
+    }
+
+    @discardableResult
+    func restoreEntries(_ removed: [RemovedClipboardEntry], to boardID: UUID) -> Int {
+        guard !removed.isEmpty,
+              let boardIndex = boards.firstIndex(where: { $0.id == boardID }) else { return 0 }
+
+        let restoredEntries = removed.map(\.entry)
+        let restoredIDs = Set(restoredEntries.map(\.id))
+        boards[boardIndex].entries.removeAll { existing in
+            restoredIDs.contains(existing.id)
+                || restoredEntries.contains(where: { $0.payload == existing.payload })
+        }
+        for removedEntry in removed.sorted(by: { $0.index < $1.index }) {
+            let insertionIndex = min(max(removedEntry.index, 0), boards[boardIndex].entries.count)
+            boards[boardIndex].entries.insert(removedEntry.entry, at: insertionIndex)
+        }
+        save()
+        return removed.count
     }
 
     func moveEntry(id: UUID, toInsertionIndex insertionIndex: Int, in boardID: UUID) {

@@ -117,7 +117,31 @@ final class HistoryStore {
     }
 
     func remove(id: UUID) {
-        entries.removeAll { $0.id == id }
+        _ = remove(ids: [id])
+    }
+
+    @discardableResult
+    func remove(ids: Set<UUID>) -> [RemovedClipboardEntry] {
+        guard !ids.isEmpty else { return [] }
+        let removed = entries.enumerated().compactMap { index, entry in
+            ids.contains(entry.id) ? RemovedClipboardEntry(entry: entry, index: index) : nil
+        }
+        guard !removed.isEmpty else { return [] }
+        entries.removeAll { ids.contains($0.id) }
+        save()
+        return removed
+    }
+
+    func restore(_ removed: [RemovedClipboardEntry]) {
+        guard !removed.isEmpty else { return }
+        let restoredEntries = removed.map(\.entry)
+        let restoredIDs = Set(restoredEntries.map(\.id))
+        entries.removeAll { existing in
+            restoredIDs.contains(existing.id)
+                || restoredEntries.contains(where: { $0.payload == existing.payload })
+        }
+        entries.append(contentsOf: restoredEntries)
+        trimToLimits()
         save()
     }
 
